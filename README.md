@@ -43,7 +43,7 @@ Each forced order gives the same result on every run. There is no load test and 
 
 ```
 $ racetrap examples/tickets/buggy.toml
-racetrap 0.1.0
+racetrap 0.2.0
 proxy  127.0.0.1:6499 -> localhost:5432
 app    http://127.0.0.1:8765
 
@@ -64,6 +64,24 @@ Report: racetrap-report.html
 - **It never changes your code, and it is not for production.** Point it at a test database you can wipe. It only watches and delays SQL.
 - **It is not a load test.** It does not fire thousands of requests and hope. It forces each order once.
 - **It does not see everything.** Postgres only, two requests at a time, and locks held outside Postgres, like Redis or an in-process mutex, are invisible to it.
+
+## What a pass means
+
+A pass is a bounded guarantee, not a proof that an API has no races.
+
+For every pair of requests in the scenario, and for each request paired with itself, racetrap forces every order of this shape: one request stops right before one of its SQL statements, the other runs until it finishes or waits on a lock, and then the first one continues. A pass means none of those orders gave a result that differs from running the two requests one at a time, starting from the data your `setup` creates, at the isolation level your app uses.
+
+That shape covers the common bugs: lost updates, check then write like the double booking above, write skew between two transactions, and double submits.
+
+A pass says nothing about:
+
+- races that need three or more requests, or more than one switch between the two
+- starting data your `setup` does not create
+- effects racetrap does not compare, such as response bodies, emails, queues and caches
+- statements the app sends after it has answered, which racetrap warns about
+- anything guarded outside Postgres
+
+A reported race is never a prediction. racetrap ran that order against your app and saw the responses and rows shown in the report. A false alarm is still possible when a value changes between two correct runs in a way racetrap did not notice, and `ignore` fixes that.
 
 ## Benchmark
 
@@ -91,7 +109,9 @@ pip install racetrap
 racetrap init --openapi http://127.0.0.1:8000/openapi.json
 ```
 
-`init` writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Add the setup SQL, keep the requests that touch shared data, and run `racetrap racetrap.toml`.
+`init` reads JSON or YAML and writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Add the setup SQL, keep the requests that touch shared data, and run `racetrap racetrap.toml`.
+
+No Python on the machine? The repository has a Dockerfile, and the [reference](docs/reference.md#docker) shows how to run it.
 
 ## Scenario file
 
@@ -129,7 +149,7 @@ json = { user = "bob" }
 | `refs` | Optional id references without a foreign key, like `{ "orders.user_id" = "users.id" }`. |
 | `proxy`, `database_env`, `schema`, `stall_ms` | Defaults `127.0.0.1:6499`, `DATABASE_URL`, `public` and `1000`. |
 
-`${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits.
+`${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits. The [reference](docs/reference.md) covers every key, the command line and the JSON results.
 
 ## Run it in CI
 
@@ -154,13 +174,26 @@ jobs:
           scenario: racetrap.toml
 ```
 
-The job fails when any pair races, and the HTML report is uploaded as an artifact. Install your app's own dependencies before the racetrap step, so `command` can start it.
+The job fails when any pair races, and the HTML report is uploaded as an artifact. Install your app's own dependencies before the racetrap step, so `command` can start it. Outside the action, `racetrap racetrap.toml --json results.json` writes the results for scripts.
 
 ## How it decides
 
 The check is serializability. Every outcome must match running the two requests one after the other, in some order. racetrap compares the HTTP status of each request and the rows of every table.
 
 Values the database fills in differ between correct runs, so ids, timestamps and random values are left out, and a reference to a generated id is compared by the row it points to. A deadlock or an unretried serialization failure that turns into a 500 counts as a race. racetrap stops instead of passing if the app dies, and the exit code is 1 when any pair races, so it can fail a CI job.
+
+## Compatibility
+
+| | Tested in CI |
+| --- | --- |
+| Postgres | 14, 15, 16, 17, 18 |
+| Python, to run racetrap | 3.11 to 3.14 |
+| Systems | Linux, Windows, macOS |
+| Drivers | asyncpg, psycopg 3, psycopg2 |
+
+Your app can be in any language. racetrap speaks the Postgres protocol and never looks at the client. node-postgres was checked by hand, and other drivers are not in CI yet.
+
+Two things are not supported yet. The proxy speaks plain TCP on both sides, so the app must not require TLS to reach it, and the test database must accept connections without TLS. A connection pooler such as PgBouncer between racetrap and Postgres is untested.
 
 ## Prior work
 
