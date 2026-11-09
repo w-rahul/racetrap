@@ -43,7 +43,7 @@ app    http://127.0.0.1:8765
   bob books    vs  alice books   5 orders  RACE
   bob books    vs  bob books     5 orders  RACE
 
-4 of 4 pairs race. 30 runs in 3.2s.
+4 of 4 pairs race. 34 runs in 3.7s.
 Report: deadheat-report.html
 ```
 
@@ -56,7 +56,7 @@ Add `FOR UPDATE` to the read and run it again:
 ```
 $ deadheat examples/tickets/fixed.toml
   ...
-No races in 4 pairs. 30 runs in 3.3s.
+No races in 4 pairs. 34 runs in 3.8s.
 ```
 
 ## Try it
@@ -110,6 +110,7 @@ json = { user = "bob" }
 | `init` | Optional SQL run once before the app starts, such as creating tables. |
 | `invariants` | Optional SQL that must return true after every order, like `SELECT count(*) <= 1 FROM orders`. |
 | `ignore` | Optional columns to leave out of the comparison, as `table.column`. |
+| `refs` | Optional references that have no foreign key, like `{ "memberships.user_id" = "users.id" }`. |
 | `proxy` | Where the proxy listens. Default `127.0.0.1:6499`. |
 | `database_env` | The variable `command` gets the proxy URL in. Default `DATABASE_URL`. |
 | `schema` | Schema to compare. Default `public`. |
@@ -123,9 +124,13 @@ Each request is also paired with itself, which catches double submits.
 
 The check is serializability. Every outcome deadheat sees must match running the two requests one after the other, in some order. It compares the HTTP status of each request and the rows of every table in the schema.
 
-Some values differ between correct runs: ids from sequences, timestamps, random tokens. deadheat leaves out columns whose default is a sequence, an identity, `now()` or a random function. It also runs every request twice from the same state and leaves out any column that changed between the two runs. You can add more with `ignore`.
+Some values differ between correct runs: ids from sequences, timestamps, random tokens. deadheat leaves out columns whose default is a sequence, an identity, a clock or a random function. It also runs every request, and every pair, twice from the same state and leaves out any column that changed between the two runs. You can add more with `ignore`.
 
-A deadlock or an unretried serialization failure that turns into a 500 is a race too, and the report names it.
+Ids are harder. When two requests insert at once, which one gets id 1 depends on timing, so a join table like `memberships(user_id, account_id)` can hold different numbers in a correct run. deadheat replaces each reference to a generated id with the row it points to, then compares. A membership that links alice to bob's account is still caught. It reads references from foreign keys, and `refs` covers the ones without a key.
+
+A deadlock or an unretried serialization failure that turns into a 500 is a race too, and the report names it. An invariant that fails even when the requests run one at a time is reported as a warning, not a race.
+
+deadheat refuses to pass silently. It stops if the app exits or stops answering, and it warns when a statement could not be tested because it was sent after the response or its text changed between runs.
 
 The exit code is 1 when any pair races, so it can fail a CI job.
 
@@ -135,6 +140,7 @@ The exit code is 1 when any pair races, so it can fail a CI job.
 - Two requests at a time. A race that needs three is not explored.
 - Locks outside Postgres, like Redis or an in-process mutex, are invisible. deadheat waits `stall_ms` and then releases A.
 - It holds between statements, not inside one.
+- SQL the app sends on its own during a run, like a poller, counts as part of the request that is running.
 - Every run snapshots every table in the schema. Use a small test database.
 - The app needs a connection pool of at least two, or B can never start while A is held.
 
