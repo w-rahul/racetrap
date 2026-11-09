@@ -1,0 +1,44 @@
+name: action
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  action:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync
+      # the example app runs with the project's python, which has fastapi and asyncpg
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: The fixed example passes
+        uses: ./
+        with:
+          scenario: examples/tickets/fixed.toml
+          package: .
+          artifact-name: fixed-report
+      - name: The buggy example fails the job
+        id: buggy
+        continue-on-error: true
+        uses: ./
+        with:
+          scenario: examples/tickets/buggy.toml
+          package: .
+          report: buggy-report.html
+          artifact-name: buggy-report
+      - run: test "${{ steps.buggy.outcome }}" = failure

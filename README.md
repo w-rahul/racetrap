@@ -84,7 +84,14 @@ uv run racetrap examples/tickets/fixed.toml
 
 The first run finds the race. The second one has `FOR UPDATE` on the read and passes.
 
-To run it on your own app, install the command with `uv tool install git+https://github.com/w-rahul/racetrap` and write a scenario file.
+To run it on your own app, install it and start a scenario from your OpenAPI document:
+
+```sh
+pip install racetrap
+racetrap init --openapi http://127.0.0.1:8000/openapi.json
+```
+
+`init` writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Add the setup SQL, keep the requests that touch shared data, and run `racetrap racetrap.toml`.
 
 ## Scenario file
 
@@ -123,6 +130,31 @@ json = { user = "bob" }
 | `proxy`, `database_env`, `schema`, `stall_ms` | Defaults `127.0.0.1:6499`, `DATABASE_URL`, `public` and `1000`. |
 
 `${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits.
+
+## Run it in CI
+
+```yaml
+jobs:
+  races:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd pg_isready --health-interval 2s --health-retries 30
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - run: pip install -r requirements.txt
+      - uses: w-rahul/racetrap@v0.2.0
+        with:
+          scenario: racetrap.toml
+```
+
+The job fails when any pair races, and the HTML report is uploaded as an artifact. Install your app's own dependencies before the racetrap step, so `command` can start it.
 
 ## How it decides
 

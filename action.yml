@@ -1,0 +1,48 @@
+name: racetrap
+description: Find race conditions in a web API by forcing the worst order of its SQL statements.
+author: Rahul Gupta
+branding:
+  icon: shield
+  color: red
+
+inputs:
+  scenario:
+    description: Path to the scenario TOML file.
+    required: true
+  report:
+    description: Where to write the HTML report.
+    default: racetrap-report.html
+  package:
+    description: What to install, like racetrap or racetrap==0.2.0.
+    default: racetrap
+  upload-report:
+    description: Upload the report as a workflow artifact.
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded report artifact.
+    default: racetrap-report
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v10.3.3
+    - name: Install racetrap
+      shell: bash
+      env:
+        PACKAGE: ${{ inputs.package }}
+      run: uv tool install --force "$PACKAGE"
+    - name: Run racetrap
+      shell: bash
+      env:
+        SCENARIO: ${{ inputs.scenario }}
+        REPORT: ${{ inputs.report }}
+      # call it by path so the app keeps the job's own python and packages
+      run: |
+        "$(uv tool dir --bin)/racetrap" "$SCENARIO" --report "$REPORT"
+    - name: Upload the report
+      if: always() && inputs.upload-report == 'true'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ inputs.report }}
+        if-no-files-found: ignore
