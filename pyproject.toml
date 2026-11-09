@@ -1,6 +1,6 @@
 [project]
 name = "racetrap"
-version = "0.2.0"
+version = "0.3.0"
 description = "Finds race conditions in web APIs by forcing the worst order of their SQL statements."
 readme = "README.md"
 license = "MIT"

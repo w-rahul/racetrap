@@ -13,7 +13,7 @@ inputs:
     description: Where to write the HTML report.
     default: racetrap-report.html
   package:
-    description: What to install, like racetrap or racetrap==0.2.0.
+    description: What to install, like racetrap or racetrap==0.3.0.
     default: racetrap
   upload-report:
     description: Upload the report as a workflow artifact.

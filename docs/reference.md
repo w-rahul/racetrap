@@ -122,7 +122,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 
 ```json
 {
-  "racetrap": "0.2.0",
+  "racetrap": "0.3.0",
   "scenario": "buggy.toml",
   "app": "http://127.0.0.1:8765",
   "runs": 38,
@@ -165,7 +165,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 ## GitHub Action
 
 ```yaml
-- uses: w-rahul/racetrap@v0.2.0
+- uses: w-rahul/racetrap@v0.3.0
   with:
     scenario: racetrap.toml
 ```
@@ -176,7 +176,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | `report` | `racetrap-report.html` | Where to write the HTML report. |
 | `upload-report` | `true` | Upload the report as a workflow artifact. |
 | `artifact-name` | `racetrap-report` | Name of that artifact. Change it when a job runs the action twice. |
-| `package` | `racetrap` | What to install, like `racetrap==0.2.0`. |
+| `package` | `racetrap` | What to install, like `racetrap==0.3.0`. |
 
 The job needs a Postgres it can reach and your app's own dependencies installed, so `command` can start the app. The step fails when any pair races.
 
