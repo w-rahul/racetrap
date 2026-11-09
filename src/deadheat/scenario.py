@@ -63,7 +63,7 @@ def load(path):
         raise ScenarioError(f"{path}: {e}") from None
     get = _getter(data, path.name)
 
-    requests = [_request(r, i, path.name) for i, r in enumerate(get("request", list))]
+    requests = [_request(r, i, path.name) for i, r in enumerate(get("request", list, []))]
     if not requests:
         raise ScenarioError(f"{path.name}: add at least one [[request]]")
     names = [r.name for r in requests]

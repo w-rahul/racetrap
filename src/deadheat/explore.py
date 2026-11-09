@@ -38,6 +38,10 @@ SELECT EXISTS (
 """
 
 
+class RunError(Exception):
+    pass
+
+
 @dataclass
 class Event:
     t: float
@@ -172,7 +176,11 @@ class Explorer:
                 self.warnings.append(f"invariant fails after {r.name} alone: {q}")
             traces[r.name] = [e.text for e in first.events if e.kind == "sql"]
             if not traces[r.name]:
-                self.warnings.append(f"{r.name} sent no SQL through the proxy. Is the app using {self.s.database_env}?")
+                self.warnings.append(f"{r.name} sent no SQL, so nothing can race with it")
+        if not any(traces.values()):
+            # an app talking to the real database would otherwise pass with no races
+            host, port = self.s.proxy
+            raise RunError(f"no request sent SQL through the proxy. Point the app's database at {host}:{port}")
         pairs = []
         for a in self.s.requests:
             for b in self.s.requests:
@@ -190,29 +198,8 @@ class Explorer:
         for hold in holds(trace):
             outcome = await self.forced(a, b, hold)
             if outcome:
-                pair.schedules.append(Schedule(hold, outcome, self.judge(outcome, pair.serials)))
+                pair.schedules.append(Schedule(hold, outcome, judge(outcome, pair.serials, self.ignored)))
         return pair
-
-    def judge(self, outcome, serials):
-        """Why this outcome is impossible in any serial order. Empty if it is possible."""
-        state = normalize(outcome.snapshot, self.ignored)
-        states = [normalize(s.snapshot, self.ignored) for s in serials]
-        reasons = []
-        if not any(outcome.statuses == s.statuses and state == st for s, st in zip(serials, states)):
-            if not any(outcome.statuses == s.statuses for s in serials):
-                reasons.append("responses match no serial order")
-            if not any(state == st for st in states):
-                reasons.append("final data matches no serial order")
-            if not reasons:
-                reasons.append("responses and data each match a different serial order")
-        reasons += [f"invariant failed: {q}" for q in outcome.failed]
-        if reasons:
-            codes = {e.text[:5] for e in outcome.events if e.kind == "error"}
-            if "40P01" in codes:
-                reasons.append("a deadlock aborted one request")
-            if "40001" in codes:
-                reasons.append("a serialization failure was not retried")
-        return reasons
 
     async def forced(self, a, b, hold):
         await self.reset()
@@ -302,6 +289,28 @@ class Explorer:
             return e.code
         except OSError:
             return 0
+
+
+def judge(outcome, serials, ignored):
+    """Why this outcome is impossible in any serial order. Empty if it is possible."""
+    state = normalize(outcome.snapshot, ignored)
+    states = [normalize(s.snapshot, ignored) for s in serials]
+    reasons = []
+    if not any(outcome.statuses == s.statuses and state == st for s, st in zip(serials, states)):
+        if not any(outcome.statuses == s.statuses for s in serials):
+            reasons.append("responses match no serial order")
+        if not any(state == st for st in states):
+            reasons.append("final data matches no serial order")
+        if not reasons:
+            reasons.append("responses and data each match a different serial order")
+    reasons += [f"invariant failed: {q}" for q in outcome.failed]
+    if reasons:
+        codes = {e.text[:5] for e in outcome.events if e.kind == "error"}
+        if "40P01" in codes:
+            reasons.append("a deadlock aborted one request")
+        if "40001" in codes:
+            reasons.append("a serialization failure was not retried")
+    return reasons
 
 
 def holds(trace):
