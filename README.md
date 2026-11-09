@@ -1,3 +1,5 @@
+<img src="docs/icon.svg" width="72" alt="">
+
 # racetrap
 
 Finds race conditions in web APIs by forcing the worst order of their SQL statements.
@@ -17,7 +19,13 @@ async with pool.acquire() as conn, conn.transaction():
 
 This passes every test. It is inside a transaction. And when two people book the last seat at the same moment, both get it.
 
-The transaction does not help. At Postgres's default isolation level both requests read `seats_left = 1` before either one writes. Tests send one request at a time, so they never see it. Production sees it once in thousands of requests, and nobody can reproduce it.
+The transaction does not help. At Postgres's default isolation level both requests read `seats_left = 1` before either one writes. Tests send one request at a time, so they never see it. In production it shows up rarely, under load, and nobody can reproduce it.
+
+## It does not replace transactions
+
+racetrap is a test tool, not a library. You keep writing transactions, locks and normal code, and racetrap never changes any of it. It runs your real app against a real database, shows where the transaction you have is not enough, and proves that the fix you choose holds.
+
+The fix stays in your code, and it is usually one line: a `FOR UPDATE`, a conditional `UPDATE ... WHERE`, a unique constraint, or `SERIALIZABLE` with a retry.
 
 ## What racetrap does
 
