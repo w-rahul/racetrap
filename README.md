@@ -4,6 +4,8 @@
 
 Finds race conditions in web APIs by forcing the worst order of their SQL statements.
 
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-rxhxul-E0483E?logo=buymeacoffee&logoColor=white)](https://buymeacoffee.com/rxhxul)
+
 ![racetrap catching a double booking, then passing once the fix is in](docs/demo.gif)
 
 ## Why it exists
@@ -119,6 +121,10 @@ Values the database fills in differ between correct runs, so ids, timestamps and
 ## Prior work
 
 Finding these bugs from database traces comes from [ACIDRain](https://www.bailis.org/papers/acidrain-sigmod2017.pdf) (SIGMOD 2017), which found 22 attacks in 12 popular e-commerce apps. [RaceDB](https://par.nsf.gov/biblio/10617180) (IEEE S&P 2025) confirms candidates by replaying them. [ChaosSQL](https://github.com/bregaldahq/chaossql) and [Deadheat](https://github.com/sanjayrawatt/deadheat) also proxy the database, but check a rule you write and randomize the timing. racetrap needs no rule and gives the same answer on every run.
+
+## Support
+
+If racetrap caught a bug for you, you can [buy me a coffee](https://buymeacoffee.com/rxhxul).
 
 ## License
 
