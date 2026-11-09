@@ -23,7 +23,7 @@ jobs:
           --health-interval 2s
           --health-retries 30
     env:
-      DEADHEAT_TEST_DATABASE: postgresql://postgres:postgres@localhost:5432/postgres
+      RACETRAP_TEST_DATABASE: postgresql://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10

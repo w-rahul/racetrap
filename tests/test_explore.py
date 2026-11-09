@@ -1,6 +1,6 @@
 from collections import Counter
 
-from deadheat.explore import Event, Outcome, holds, judge, normalize, shape, unstable
+from racetrap.explore import Event, Outcome, holds, judge, normalize, shape, unstable
 
 IGNORED = {("bookings", "id")}
 

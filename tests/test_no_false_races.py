@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 
 from conftest import DSN, needs_db
-from deadheat.cli import run, run_async
-from deadheat.scenario import load
+from racetrap.cli import run, run_async
+from racetrap.scenario import load
 
 SCENARIO = """
 app = "http://127.0.0.1:8766"
@@ -56,7 +56,7 @@ def test_race_free_endpoint_passes(tmp_path, monkeypatch, path):
 
     result = run_async(bounded())
     if path == "/visit":
-        # its writes happen after the response, so deadheat must say it could not test them
+        # its writes happen after the response, so racetrap must say it could not test them
         assert any("not tested" in w for w in result.warnings)
     else:
         assert all(p.schedules for p in result.pairs), "every pair was explored"

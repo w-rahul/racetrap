@@ -3,9 +3,9 @@ from pathlib import Path
 import pytest
 
 from conftest import DSN, needs_db
-from deadheat.cli import run, run_async
-from deadheat.report import render
-from deadheat.scenario import load
+from racetrap.cli import run, run_async
+from racetrap.report import render
+from racetrap.scenario import load
 
 TICKETS = Path(__file__).parent.parent / "examples" / "tickets"
 

@@ -24,22 +24,22 @@ from .scenario import ScenarioError, load
 
 def main(argv=None):
     parser = argparse.ArgumentParser(
-        prog="deadheat",
+        prog="racetrap",
         description="Find race conditions in a web API by forcing the worst order of its SQL.",
     )
     parser.add_argument("scenario", help="scenario file in TOML")
-    parser.add_argument("--report", default="deadheat-report.html", help="HTML report path (default: %(default)s)")
-    parser.add_argument("--version", action="version", version=f"deadheat {__version__}")
+    parser.add_argument("--report", default="racetrap-report.html", help="HTML report path (default: %(default)s)")
+    parser.add_argument("--version", action="version", version=f"racetrap {__version__}")
     args = parser.parse_args(argv)
     try:
         scenario = load(args.scenario)
         host, port = scenario.upstream
-        print(f"deadheat {__version__}")
+        print(f"racetrap {__version__}")
         print(f"proxy  {scenario.proxy[0]}:{scenario.proxy[1]} -> {host}:{port}")
         print(f"app    {scenario.app}\n")
         result = run_async(run(scenario, printer(scenario)))
     except (ScenarioError, RunError, psycopg.Error, OSError) as e:
-        print(f"deadheat: {e}", file=sys.stderr)
+        print(f"racetrap: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
         return 130
@@ -53,7 +53,7 @@ def main(argv=None):
         Path(args.report).write_text(render(scenario, result), encoding="utf-8")
         print(f"Report: {args.report}")
     except OSError as e:
-        print(f"deadheat: could not write the report: {e}", file=sys.stderr)
+        print(f"racetrap: could not write the report: {e}", file=sys.stderr)
     return 1 if racing else 0
 
 
@@ -86,7 +86,7 @@ async def run(scenario, progress=None):
             if scenario.command:
                 # an old app left on the port would be tested instead of this one
                 if await asyncio.to_thread(ping, scenario.app):
-                    raise RunError(f"something already answers at {scenario.app}. Stop it first, deadheat starts the app itself")
+                    raise RunError(f"something already answers at {scenario.app}. Stop it first, racetrap starts the app itself")
                 app = start_app(scenario)
             await wait_ready(scenario.app, app)
             alive = (lambda: app[0].poll() is None) if app else None

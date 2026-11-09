@@ -2,6 +2,6 @@ import os
 
 import pytest
 
-DSN = os.environ.get("DEADHEAT_TEST_DATABASE")
+DSN = os.environ.get("RACETRAP_TEST_DATABASE")
 
-needs_db = pytest.mark.skipif(not DSN, reason="set DEADHEAT_TEST_DATABASE to a Postgres URL")
+needs_db = pytest.mark.skipif(not DSN, reason="set RACETRAP_TEST_DATABASE to a Postgres URL")

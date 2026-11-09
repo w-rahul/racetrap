@@ -1,4 +1,4 @@
-"""The parts of the Postgres wire protocol that deadheat needs.
+"""The parts of the Postgres wire protocol that racetrap needs.
 
 Splits a byte stream into messages and maps every Execute back to its SQL,
 for both the simple and the extended query protocol.

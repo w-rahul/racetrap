@@ -1,6 +1,6 @@
 import pytest
 
-from deadheat.scenario import ScenarioError, load
+from racetrap.scenario import ScenarioError, load
 
 GOOD = """
 app = "http://127.0.0.1:8000/"

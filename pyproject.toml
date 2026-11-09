@@ -1,5 +1,5 @@
 [project]
-name = "deadheat"
+name = "racetrap"
 version = "0.1.0"
 description = "Finds race conditions in web APIs by forcing the worst order of their SQL statements."
 readme = "README.md"
@@ -19,10 +19,10 @@ classifiers = [
 dependencies = ["psycopg[binary]>=3.2"]
 
 [project.urls]
-Repository = "https://github.com/w-rahul/deadheat"
+Repository = "https://github.com/w-rahul/racetrap"
 
 [project.scripts]
-deadheat = "deadheat.cli:main"
+racetrap = "racetrap.cli:main"
 
 [dependency-groups]
 dev = ["pytest>=8", "fastapi>=0.115", "uvicorn>=0.30", "asyncpg>=0.30"]

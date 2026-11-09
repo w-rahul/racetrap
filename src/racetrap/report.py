@@ -27,7 +27,7 @@ def render(scenario, result):
         f"ignored columns: {esc(ignored)}"
     )
     parts = [
-        f'<header><p class="mark">deadheat {__version__} · {esc(scenario.path.name)}</p>',
+        f'<header><p class="mark">racetrap {__version__} · {esc(scenario.path.name)}</p>',
         verdict,
         f'<p class="meta">{meta}</p></header>',
     ]
@@ -83,7 +83,7 @@ def responses(pair, schedule, a, b):
     rows = [
         (f"{a}, then {b}", pair.serials[0].statuses, ""),
         (f"{b}, then {a}", pair.serials[1].statuses, ""),
-        ("deadheat's order", schedule.outcome.statuses, ' class="bad"'),
+        ("racetrap's order", schedule.outcome.statuses, ' class="bad"'),
     ]
     body = "".join(
         f"<tr{cls}><th>{esc(label)}</th><td>{status(s['A'])}</td><td>{status(s['B'])}</td></tr>"
@@ -104,7 +104,7 @@ def data_diff(pair, schedule, fks, a, b):
         states = [
             (f"{a}, then {b}", serial[0][table], ""),
             (f"{b}, then {a}", serial[1][table], ""),
-            ("deadheat's order", rows, " bad"),
+            ("racetrap's order", rows, " bad"),
         ]
         cells = "".join(f'<div class="state{cls}"><h4>{esc(label)}</h4>{rows_table(cols, r)}</div>' for label, r, cls in states)
         out.append(f'<p class="table-name">{esc(table)}</p><div class="states">{cells}</div>')
@@ -126,7 +126,7 @@ def timeline(events, held, a, b):
     for e in (e for e in events if e.who != "bg"):
         if e.kind in ("ok", "error") and e.conn in open_rows:
             row = open_rows[e.conn]
-            # deadheat polls for lock waits every 20 ms, so anything quicker
+            # racetrap polls for lock waits every 20 ms, so anything quicker
             # is plain concurrency and stays on its statement's row
             if row is rows[-1] or e.t - row["t"] < 0.015:
                 row["results"].append(e)
@@ -192,7 +192,7 @@ def fix(pair, schedule, a, b):
         "<li>Or check and write in one statement, like <code>UPDATE ... WHERE stock > 0 RETURNING ...</code>, "
         "and treat zero rows as a conflict.</li>"
         "<li>Or run the transaction at <code>SERIALIZABLE</code> and retry on error 40001.</li>"
-        "</ol><p class=\"after\">Run deadheat again after the fix. It passes when every order is serializable.</p>"
+        "</ol><p class=\"after\">Run racetrap again after the fix. It passes when every order is serializable.</p>"
     )
 
 
@@ -214,7 +214,7 @@ PAGE = """<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>deadheat report</title>
+<title>racetrap report</title>
 <style>
 :root {
   --bg: #f7f6f3; --card: #ffffff; --ink: #1d1c1a; --muted: #6e6a64; --line: #e4e1dc;

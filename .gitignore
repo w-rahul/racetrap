@@ -2,4 +2,4 @@ __pycache__/
 .venv/
 .pytest_cache/
 dist/
-deadheat-report.html
+racetrap-report.html

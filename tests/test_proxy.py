@@ -4,9 +4,9 @@ import asyncpg
 import psycopg
 
 from conftest import DSN, needs_db
-from deadheat.cli import run_async
-from deadheat.proxy import Hooks, Proxy
-from deadheat.scenario import Scenario, with_address
+from racetrap.cli import run_async
+from racetrap.proxy import Hooks, Proxy
+from racetrap.scenario import Scenario, with_address
 
 
 class Tape(Hooks):

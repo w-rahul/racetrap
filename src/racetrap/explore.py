@@ -1,6 +1,6 @@
 """Runs requests in forced orders and checks each outcome against serial ones.
 
-For a pair of requests A and B, deadheat first runs A then B, and B then A,
+For a pair of requests A and B, racetrap first runs A then B, and B then A,
 one at a time. Then for every statement A sends, it holds A right before
 that statement, lets B run, and releases A. If the responses or the final
 data match neither serial run, no serial order could have produced them, so

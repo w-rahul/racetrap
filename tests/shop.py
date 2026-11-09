@@ -1,4 +1,4 @@
-"""Race free endpoints that once fooled deadheat. Every order must pass."""
+"""Race free endpoints that once fooled racetrap. Every order must pass."""
 
 import asyncio
 import os

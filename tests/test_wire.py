@@ -3,7 +3,7 @@ import struct
 
 import pytest
 
-from deadheat import wire
+from racetrap import wire
 
 
 def msg(kind, *parts):

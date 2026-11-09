@@ -6,7 +6,7 @@ import logging
 
 from . import wire
 
-log = logging.getLogger("deadheat")
+log = logging.getLogger("racetrap")
 
 # Extended protocol messages wait for Sync or Flush, so a statement is always
 # held or forwarded as one piece together with its Parse and Bind.
