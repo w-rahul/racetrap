@@ -3,6 +3,7 @@ name: test
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -10,8 +11,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.11", "3.14"]
-        postgres: ["14", "18"]
+        include:
+          - { python: "3.11", postgres: "14" }
+          - { python: "3.14", postgres: "18" }
     services:
       postgres:
         image: postgres:${{ matrix.postgres }}
