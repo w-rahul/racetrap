@@ -194,9 +194,9 @@ Your app can be in any language. racetrap speaks the Postgres protocol and never
 
 Two things are not supported yet. The proxy speaks plain TCP on both sides, so the app must not require TLS to reach it, and the test database must accept connections without TLS. A connection pooler such as PgBouncer between racetrap and Postgres is untested.
 
-## Prior work
+## Research behind it
 
-Finding these bugs from database traces comes from [ACIDRain](https://www.bailis.org/papers/acidrain-sigmod2017.pdf) (SIGMOD 2017), which found 22 attacks in 12 popular e-commerce apps. [RaceDB](https://par.nsf.gov/biblio/10617180) (IEEE S&P 2025) confirms candidates by replaying them. [ChaosSQL](https://github.com/bregaldahq/chaossql) and [Deadheat](https://github.com/sanjayrawatt/deadheat) also proxy the database, but check a rule you write and randomize the timing. racetrap needs no rule and gives the same answer on every run.
+Finding these bugs from database traces comes from [ACIDRain](https://www.bailis.org/papers/acidrain-sigmod2017.pdf) (SIGMOD 2017), which found 22 attacks in 12 popular e-commerce apps. [RaceDB](https://par.nsf.gov/biblio/10617180) (IEEE S&P 2025) confirms candidates by replaying them. racetrap takes the practical part of both: watch the real SQL, force the bad order, and prove the race with a run you can repeat.
 
 ## License
 
