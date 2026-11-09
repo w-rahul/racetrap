@@ -21,18 +21,16 @@ FORMATS = {
 
 HEADER = """# Written by racetrap init from {source}
 #
-# 1. Fill setup with SQL that puts your test data back in a known state.
-# 2. Keep only the requests that touch shared data. racetrap tries every
-#    pair, so 5 requests make 25 pairs.
-# 3. Check the example bodies and ids, then run: racetrap {out}
+# 1. Check the example bodies and ids.
+# 2. Run: racetrap {out}
+#
+# racetrap saves your tables at the start and puts them back before every
+# order. To reset the data with your own SQL instead, add: setup = ["..."]
+# It skips pairs of requests that share no tables.
 {auth}
 app = {app}
 database = "${{DATABASE_URL}}"
 # command = "uvicorn main:app --port 8000"
-
-setup = [
-    # "TRUNCATE orders RESTART IDENTITY",
-]
 """
 
 

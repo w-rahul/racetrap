@@ -6,6 +6,9 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 
 ### Added
 
+- racetrap saves the tables before it starts, restores them before every order, and leaves the database as it found it. `setup` SQL is now optional.
+- Pairs of requests that share no table that either one writes are skipped. `--all-pairs` tests every pair.
+- An order that races is run a second time, and reported only if it races again.
 - `racetrap init` reads OpenAPI documents in YAML as well as JSON.
 - `--json PATH` writes the results as JSON, for scripts and dashboards.
 - A Dockerfile, so teams without Python can run racetrap. CI builds the image and runs it against the ticket example.
@@ -15,6 +18,8 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 
 ### Changed
 
+- Holds that only repeat a one at a time run are left out. The ticket example now takes 3 orders for each pair, down from 5.
+- `setup` strings may hold several statements.
 - CI covers Postgres 14 to 18, Python 3.11 to 3.14, and Linux, Windows and macOS.
 - The proxy is tested with psycopg2, next to asyncpg and psycopg 3.
 - ruff checks the code in CI, and the test run reports coverage.

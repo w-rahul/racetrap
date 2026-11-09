@@ -8,17 +8,12 @@
 
 ## Scenario file
 
-A scenario is a TOML file. It names the app, the database, the SQL that resets the data, and the requests to race.
+A scenario is a TOML file. It names the app, the database and the requests to race.
 
 ```toml
 app = "http://127.0.0.1:8000"
 database = "${DATABASE_URL}"
 command = "uvicorn shop:app --port 8000"
-
-setup = [
-    "TRUNCATE orders, stock RESTART IDENTITY",
-    "INSERT INTO stock VALUES (1, 1)",
-]
 
 [[request]]
 name = "alice buys"
@@ -38,12 +33,12 @@ headers = { authorization = "Bearer bob-token" }
 | Key | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `app` | yes | | Base URL of the app. Starts with `http://` or `https://`. |
-| `database` | yes | | URL of the real Postgres. racetrap connects to it directly for setup and snapshots, and the proxy forwards to it. |
-| `setup` | yes | | List of SQL statements run before every order. They must put the data back in the same state each time. |
+| `database` | yes | | URL of the real Postgres. The proxy forwards to it, and racetrap connects to it directly to save, restore and compare the tables. |
 | `[[request]]` | yes | | The requests to race. At least one. See below. |
 | `command` | no | | Command that starts the app. racetrap runs it in the scenario file's folder, with the database URL pointing at the proxy, and stops it at the end. |
 | `database_env` | no | `DATABASE_URL` | The environment variable `command` receives the proxy URL in. |
-| `init` | no | `[]` | List of SQL statements run once, before the app starts. Good for creating tables. |
+| `init` | no | `[]` | List of SQL statements run once, before the app starts. Good for creating tables and seed rows. |
+| `setup` | no | `[]` | List of SQL statements run before every order. They must put the data back in the same state each time. With `setup`, racetrap does not save or restore tables. See [How the data is reset](#how-the-data-is-reset). |
 | `invariants` | no | `[]` | List of SQL queries that must return true after every order, like `SELECT count(*) <= 1 FROM orders`. A failure is reported as a race, unless it also fails in both one at a time runs. |
 | `ignore` | no | `[]` | List of `table.column` entries to leave out of the comparison. |
 | `refs` | no | `{}` | Id references that have no foreign key, like `{ "orders.user_id" = "users.id" }`. racetrap compares such a column by the row it points to. |
@@ -63,7 +58,28 @@ headers = { authorization = "Bearer bob-token" }
 | `json` | no | | The request body, sent as JSON. |
 | `headers` | no | `{}` | Extra headers, such as `authorization`. Give each request its own user to race two users. |
 
-racetrap tries every ordered pair, and pairs each request with itself, which catches double submits. Five requests make 25 pairs.
+racetrap pairs every request with every other one, in both roles, and with itself, which catches double submits. See [What is skipped](#what-is-skipped) for the pairs it leaves out.
+
+### How the data is reset
+
+Every order must start from the same data. Without `setup`, racetrap takes care of that:
+
+1. Before the first order it copies every table of the schema into a schema named `racetrap_snapshot`, and notes the state of every sequence.
+2. Before each order it empties the tables, copies the rows back and resets the sequences, in one transaction.
+3. At the end it restores the data once more and drops `racetrap_snapshot`, so the database is left as it was found.
+
+The data that counts is what the database holds when racetrap starts: your own seed, or rows inserted by `init`.
+
+Restoring switches off triggers and foreign key checks for its own transaction, so tables can go back in any order. That needs a superuser on the test database, which the standard Postgres image gives you. Without one, write `setup` SQL instead.
+
+### What is skipped
+
+racetrap leaves out work that cannot change the answer.
+
+- **Holds.** A request is not held while it has only opened a transaction, or when it has nothing left but handing its connection back. Letting the other request run at those points is the same as a one at a time run, which is already checked.
+- **Pairs.** A pair is skipped when neither request writes a table the other one touches. racetrap reads the table names from the SQL each request sent, adds the tables whose rows changed, and follows foreign keys: a write to a child reads its parent, and a delete or update can cascade into children. Every doubt keeps the pair. A request is never skipped when it calls a function of your own, reads a view, touches a table with triggers or rules, or sends SQL that names no table racetrap knows.
+
+Skipped pairs are listed in the output and the report. `--all-pairs` tests every pair.
 
 ### How the app is started
 
@@ -76,7 +92,7 @@ The app needs a connection pool of at least two, or the second request cannot st
 ## Command line
 
 ```
-racetrap SCENARIO [--report PATH] [--json PATH]
+racetrap SCENARIO [--report PATH] [--json PATH] [--all-pairs]
 racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 ```
 
@@ -84,6 +100,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | --- | --- | --- |
 | `--report PATH` | `racetrap-report.html` | Where to write the HTML report. |
 | `--json PATH` | | Also write the results as JSON. |
+| `--all-pairs` | | Test every pair, even two requests that share no tables. |
 | `init --openapi SOURCE` | | Path or URL of an OpenAPI document, in JSON or YAML. |
 | `init --app URL` | from the URL or the document's servers | Base URL to put in the scenario. |
 | `init -o FILE` | `racetrap.toml` | The scenario file to write. |
@@ -108,8 +125,8 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
   "racetrap": "0.2.0",
   "scenario": "buggy.toml",
   "app": "http://127.0.0.1:8765",
-  "runs": 34,
-  "seconds": 4.63,
+  "runs": 38,
+  "seconds": 5.02,
   "racing_pairs": 4,
   "warnings": [],
   "ignored_columns": ["bookings.id"],
@@ -117,7 +134,8 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
     {
       "a": "alice books",
       "b": "bob books",
-      "orders": 5,
+      "skipped": false,
+      "orders": 3,
       "responses": {
         "a_then_b": { "A": 200, "B": 409 },
         "b_then_a": { "B": 200, "A": 409 }
@@ -142,6 +160,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 - `responses` holds the HTTP status of each request in the two one at a time runs.
 - Each entry in `races` is one forced order that no one at a time run can explain. `held_before` is the statement request A was held before, and `occurrence` says which time A sent it.
 - A pair with an empty `races` list passed.
+- A pair with `skipped` set to true was not run, because the two requests share no table that either one writes. Its `responses` is null.
 
 ## GitHub Action
 

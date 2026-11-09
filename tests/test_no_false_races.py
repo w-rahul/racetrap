@@ -63,3 +63,16 @@ def test_race_free_endpoint_passes(tmp_path, monkeypatch, path):
     assert not [p for p in result.pairs if p.races]
     # B waiting on the app's lock is released after stall_ms, not after a 30 s timeout
     assert result.seconds < 30
+
+
+@needs_db
+def test_pairs_that_share_no_tables_are_skipped(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    text = SCENARIO.replace("PATH", "/signup", 1).replace("PATH", "/take").replace("APP_DIR", str(Path(__file__).parent))
+    (tmp_path / "shop.toml").write_text(text, encoding="utf-8")
+    result = run_async(asyncio.wait_for(run(load(tmp_path / "shop.toml")), 120))
+    skipped = {(p.a.name, p.b.name) for p in result.pairs if p.skipped}
+    # signing up writes users and accounts, taking writes counters, so only the same request can race with itself
+    assert skipped == {("alice", "bob"), ("bob", "alice")}
+    assert all(p.schedules for p in result.pairs if not p.skipped)
+    assert not [p for p in result.pairs if p.races]

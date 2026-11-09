@@ -5,12 +5,10 @@ import re
 from datetime import datetime
 
 from . import __version__
-from .explore import normalize, shape
+from .explore import POOL_RESET, normalize, shape
 
 LOCKING_READ = re.compile(r"\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|SHARE|KEY\s+SHARE)\b", re.I)
 VERB = re.compile(r"\s*([A-Za-z]+)")
-# what connection pools send when a connection goes back, shown as one quiet step
-POOL_RESET = re.compile(r"pg_advisory_unlock_all|DISCARD ALL|RESET ALL", re.I)
 COUNTED = re.compile(r"^(?:SELECT|UPDATE|DELETE|INSERT \d+|MERGE|COPY|FETCH|MOVE) (\d+)$")
 ROWS = re.compile(r"^\d+ rows?$")
 
@@ -52,7 +50,7 @@ def render(scenario, result):
     if calm:
         items = "".join(
             f'<div class="pass"><span><b>{esc(p.a.name)}</b> vs <b>{esc(names(p)[1])}</b></span>'
-            f"<em>{len(p.schedules)} orders, all serializable</em></div>"
+            f"<em>{passed(p)}</em></div>"
             for p in calm
         )
         parts.append(f'<section class="passed"><h2>Passed</h2><div class="pass-grid">{items}</div></section>')
@@ -61,6 +59,12 @@ def render(scenario, result):
         "It does not replace them, and it never changes your code.</footer>"
     )
     return PAGE.replace("{body}", "\n".join(parts))
+
+
+def passed(pair):
+    if pair.skipped:
+        return "skipped, the two share no table that either one writes"
+    return f"{len(pair.schedules)} orders, all serializable"
 
 
 def summary(scenario, result):
@@ -78,8 +82,9 @@ def summary(scenario, result):
             {
                 "a": p.a.name,
                 "b": p.b.name,
+                "skipped": p.skipped,
                 "orders": len(p.schedules),
-                "responses": {"a_then_b": p.serials[0].statuses, "b_then_a": p.serials[1].statuses},
+                "responses": {"a_then_b": p.serials[0].statuses, "b_then_a": p.serials[1].statuses} if p.serials else None,
                 "races": [
                     {"held_before": r.hold[0], "occurrence": r.hold[1], "responses": r.outcome.statuses, "reasons": r.reasons}
                     for r in p.races

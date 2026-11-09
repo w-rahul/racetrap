@@ -55,7 +55,7 @@ def test_writes_one_request_per_write_operation():
     }
     assert drop == {"name": "drop_coupon", "method": "DELETE", "path": "/coupons/SUMMER"}
     assert data["app"] == "http://127.0.0.1:8000"
-    assert data["setup"] == []
+    assert "setup" not in data, "racetrap restores the data itself"
 
 
 def test_names_stay_unique():

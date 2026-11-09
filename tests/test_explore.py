@@ -1,6 +1,16 @@
 from collections import Counter
 
-from racetrap.explore import Event, Outcome, holds, judge, normalize, shape, unstable
+from racetrap.explore import (
+    Event,
+    Outcome,
+    footprint,
+    holds,
+    independent,
+    judge,
+    normalize,
+    shape,
+    unstable,
+)
 
 IGNORED = {("bookings", "id")}
 
@@ -41,9 +51,44 @@ def test_invariants_and_deadlocks_are_named():
     assert reasons == ["invariant failed: SELECT false", "a deadlock aborted one request"]
 
 
-def test_holds_skip_the_first_statement_and_count_repeats():
-    trace = ["BEGIN", "SELECT n", "UPDATE t", "SELECT n", "COMMIT"]
-    assert holds(trace) == [("SELECT n", 1), ("UPDATE t", 1), ("SELECT n", 2), ("COMMIT", 1)]
+def test_holds_leave_out_orders_that_are_serial_anyway():
+    reset = "SELECT pg_advisory_unlock_all();\nCLOSE ALL;\nUNLISTEN *;\nRESET ALL;"
+    trace = ["BEGIN;", "SELECT n", "UPDATE t", "SELECT n", "COMMIT;", reset]
+    # before the first SELECT A has only opened a transaction, and after COMMIT it is done
+    assert holds(trace) == [("UPDATE t", 1), ("SELECT n", 2), ("COMMIT;", 1)]
+
+
+def test_holds_keep_every_gap_between_statements_that_commit_on_their_own():
+    assert holds(["SELECT n", "UPDATE t", "INSERT x"]) == [("UPDATE t", 1), ("INSERT x", 1)]
+
+
+NAMES = {"shows", "bookings", "users", "audit"}
+PARENTS, CHILDREN = {"bookings": {"shows"}}, {"shows": {"bookings"}}
+
+
+def test_footprint_reads_tables_from_sql_and_follows_foreign_keys():
+    trace = ["BEGIN;", "SELECT seats_left FROM shows WHERE id = $1", "INSERT INTO bookings (show_id) VALUES ($1)", "COMMIT;"]
+    assert footprint(trace, NAMES, set(), PARENTS, CHILDREN, set()) == ({"shows", "bookings"}, {"bookings"})
+    # an insert reads the parent row, and a delete can cascade into the child table
+    assert footprint(["INSERT INTO bookings VALUES ($1)"], NAMES, set(), PARENTS, CHILDREN, set())[0] == {"shows", "bookings"}
+    assert footprint(["DELETE FROM shows WHERE id = $1"], NAMES, set(), PARENTS, CHILDREN, set())[1] == {"shows", "bookings"}
+    # rows that changed count as written even when no statement names the table
+    assert footprint(["SELECT ?"], NAMES, set(), {}, {}, {"audit"}) == ({"audit"}, {"audit"})
+
+
+def test_footprint_gives_up_when_sql_cannot_tell():
+    assert footprint(["SELECT book_seat($1)"], NAMES, {"book_seat"}, {}, {}, set()) is None, "a function of your own"
+    assert footprint(["SELECT * FROM somewhere_else"], NAMES, set(), {}, {}, set()) is None, "a relation racetrap does not know"
+    assert footprint(["UPDATE users SET name = $1"], NAMES, {"users"}, {}, {}, set()) is None, "a table with a trigger"
+
+
+def test_only_pairs_that_cannot_affect_each_other_are_independent():
+    reader, writer, other = ({"users"}, set()), ({"users"}, {"users"}), ({"audit"}, {"audit"})
+    assert independent(reader, reader), "two reads cannot race"
+    assert independent(writer, other)
+    assert not independent(reader, writer)
+    assert not independent(writer, writer)
+    assert not independent(None, other), "an unknown footprint is never skipped"
 
 
 def test_normalize_drops_ignored_columns_and_keeps_duplicates():

@@ -5,6 +5,10 @@ one at a time. Then for every statement A sends, it holds A right before
 that statement, lets B run, and releases A. If the responses or the final
 data match neither serial run, no serial order could have produced them, so
 the app has a race.
+
+Two shortcuts keep that fast without changing the answer. A hold is skipped
+when it would only repeat a serial order, and a pair is skipped when the two
+requests share no table that either one writes.
 """
 
 import asyncio
@@ -17,6 +21,7 @@ import urllib.request
 from collections import Counter
 from dataclasses import dataclass, field
 
+import psycopg
 from psycopg import sql as pgsql
 
 from .proxy import Hooks
@@ -38,6 +43,56 @@ JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = c.conkey[1]
 JOIN pg_attribute ra ON ra.attrelid = c.confrelid AND ra.attnum = c.confkey[1]
 WHERE c.contype = 'f' AND cardinality(c.conkey) = 1 AND c.connamespace = to_regnamespace(%s)
 """
+
+SNAPSHOT = "racetrap_snapshot"
+
+# Tables to save, with the columns that can be written back. Partitions come
+# back through their parent, and generated columns fill themselves in.
+RESTORABLE = """
+SELECT c.relname, array_agg(a.attname::text ORDER BY a.attnum)
+FROM pg_class c
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped AND a.attgenerated = ''
+WHERE c.relnamespace = to_regnamespace(%s) AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+GROUP BY c.relname
+ORDER BY c.relname
+"""
+
+SEQUENCES = "SELECT c.relname FROM pg_class c WHERE c.relkind = 'S' AND c.relnamespace = to_regnamespace(%s)"
+
+# Names that tell what a statement can touch. A view, a function of your own,
+# or a table with triggers or rules can reach tables the SQL never names.
+NAMES = """
+WITH own AS (SELECT oid FROM pg_namespace WHERE nspname !~ '^(pg_|information_schema$|racetrap_snapshot$)')
+SELECT 'table', c.relname FROM pg_class c WHERE c.relkind IN ('r', 'p') AND c.relnamespace IN (SELECT oid FROM own)
+UNION ALL
+SELECT 'opaque', c.relname FROM pg_class c WHERE c.relkind IN ('v', 'm', 'f') AND c.relnamespace IN (SELECT oid FROM own)
+UNION ALL
+SELECT 'opaque', p.proname FROM pg_proc p
+WHERE p.pronamespace IN (SELECT oid FROM own)
+  AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.objid = p.oid AND d.deptype = 'e')
+UNION ALL
+SELECT 'opaque', c.relname FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid WHERE NOT t.tgisinternal
+UNION ALL
+SELECT 'opaque', r.tablename FROM pg_rules r WHERE r.schemaname !~ '^pg_'
+"""
+
+# Every foreign key as (child table, parent table).
+LINKS = """
+SELECT t.relname, rt.relname FROM pg_constraint c
+JOIN pg_class t ON t.oid = c.conrelid
+JOIN pg_class rt ON rt.oid = c.confrelid
+WHERE c.contype = 'f'
+"""
+
+# A statement that reads nothing, writes nothing and ends no transaction.
+CONTROL = re.compile(r"^\s*(?:BEGIN|START\s+TRANSACTION|SET|SHOW|RESET)\b[^;]*;?\s*$", re.I)
+# What connection pools send when a connection goes back.
+POOL_RESET = re.compile(r"pg_advisory_unlock_all|DISCARD ALL|RESET ALL", re.I)
+# Words that mean a statement touches some relation, named or not.
+DATA = re.compile(r"\b(?:FROM|INTO|UPDATE|DELETE|CALL|DO|COPY|EXECUTE|TRUNCATE|MERGE|LOCK|TABLE|JOIN|USING)\b", re.I)
+WRITE = re.compile(r"\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|COPY)\b", re.I)
+# Writes that foreign keys can carry on into child tables.
+CASCADES = re.compile(r"\b(?:UPDATE|DELETE|MERGE|TRUNCATE)\b", re.I)
 
 # Values the database fills in differ between runs and between orders.
 GENERATED = re.compile(r"nextval\(|now\(\)|current_(time|date)|localtime|_timestamp\(|random|uuid", re.I)
@@ -90,6 +145,7 @@ class Pair:
     serials: list
     ignored: set
     schedules: list = field(default_factory=list)
+    skipped: bool = False
 
     @property
     def races(self):
@@ -181,12 +237,14 @@ class Recorder(Hooks):
 
 
 class Explorer:
-    def __init__(self, scenario, db, recorder, progress=None, alive=None):
+    def __init__(self, scenario, db, recorder, progress=None, alive=None, all_pairs=False):
         self.s = scenario
         self.db = db
         self.rec = recorder
         self.progress = progress or (lambda pair: None)
         self.alive = alive or (lambda: True)
+        self.all_pairs = all_pairs
+        self.restore = None
         self.runs = 0
         self.warnings = []
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -200,8 +258,22 @@ class Explorer:
         self.tables, self.ignored, self.fks = await self.introspect()
         self.ignored |= self.s.ignore
         self.fks.update(self.s.refs)
+        if not self.s.setup:
+            self.restore = await self.save()
+        try:
+            return await self.explore(start)
+        finally:
+            if self.restore:
+                # leave the database the way it was found
+                await self.revert()
+                await self.db.execute(pgsql.SQL("DROP SCHEMA {} CASCADE").format(pgsql.Identifier(SNAPSHOT)))
+
+    async def explore(self, start):
         await self.learn_background()
-        traces = {}
+        names, opaque, parents, children = await self.catalog()
+        await self.revert()
+        base = await self.snapshot()
+        traces, feet = {}, {}
         for r in self.s.requests:
             first = await self.serial([("A", r)])
             again = await self.serial([("A", r)])
@@ -213,6 +285,8 @@ class Explorer:
             traces[r.name] = [shape(e.text) for e in first.events if e.kind == "sql" and e.who != "bg"]
             if not traces[r.name]:
                 self.warn(f"{r.name} sent no SQL, so nothing can race with it")
+            changed = {t.lower() for t in self.tables if rows(base[t]) != rows(first.snapshot[t])}
+            feet[r.name] = footprint(traces[r.name], names, opaque, parents, children, changed)
         if not any(traces.values()):
             # an app talking to the real database would otherwise pass with no races
             host, port = self.s.proxy
@@ -220,9 +294,12 @@ class Explorer:
         pairs = []
         for a in self.s.requests:
             for b in self.s.requests:
-                pairs.append(await self.pair(a, b, traces[a.name]))
+                if not self.all_pairs and independent(feet[a.name], feet[b.name]):
+                    pairs.append(Pair(a, b, traces[a.name], [], set(), skipped=True))
+                else:
+                    pairs.append(await self.pair(a, b, traces[a.name]))
                 self.progress(pairs[-1])
-        ignored = set().union(*(p.ignored for p in pairs))
+        ignored = self.ignored.union(*(p.ignored for p in pairs))
         return Result(pairs, ignored, self.fks, self.runs, time.perf_counter() - start, self.warnings)
 
     async def learn_background(self, seconds=1.0):
@@ -252,8 +329,16 @@ class Explorer:
         points = holds(trace)
         for hold in points:
             outcome = await self.forced(a, b, hold)
-            if outcome:
-                pair.schedules.append(Schedule(hold, outcome, judge(outcome, pair.serials, ignored, self.fks)))
+            if not outcome:
+                continue
+            reasons = judge(outcome, pair.serials, ignored, self.fks)
+            if reasons:
+                # a forced order repeats exactly, so a race that does not is noise
+                again = await self.forced(a, b, hold)
+                if not again or not judge(again, pair.serials, ignored, self.fks):
+                    self.warn(f"{a.name} vs {b.name}: an order raced once and passed when repeated, so it is not reported")
+                    reasons = []
+            pair.schedules.append(Schedule(hold, outcome, reasons))
         if len(pair.schedules) < len(points):
             missed = len(points) - len(pair.schedules)
             self.warn(f"{a.name} vs {b.name}: {missed} of {len(points)} statements were sent after the response or changed between runs, so they were not tested")
@@ -314,8 +399,56 @@ class Explorer:
 
     async def reset(self):
         self.runs += 1
+        await self.revert()
+
+    async def revert(self):
+        """Put the data back: the saved tables, or the scenario's own setup."""
+        if self.restore:
+            async with self.db.transaction():
+                await self.db.execute(self.restore, prepare=False)
         for q in self.s.setup:
-            await self.db.execute(q)
+            # never prepared, so a setup string can hold several statements
+            await self.db.execute(q, prepare=False)
+
+    async def save(self):
+        """Copy every table aside once. Returns the SQL that puts the copy back."""
+        ident = pgsql.Identifier
+        try:
+            # without foreign key checks and triggers, tables go back in any order
+            await self.db.execute("SET session_replication_role = replica")
+            await self.db.execute("RESET session_replication_role")
+        except psycopg.errors.InsufficientPrivilege:
+            raise RunError("restoring the data needs a superuser on the test database. Add setup SQL to the scenario instead") from None
+        if await self.fetch("SELECT to_regnamespace(%s) IS NOT NULL", (SNAPSHOT,)):
+            self.warn("an earlier run did not finish, so the test data may not be in its starting state")
+        tables = await (await self.db.execute(RESTORABLE, (self.s.schema,))).fetchall()
+        sequences = await (await self.db.execute(SEQUENCES, (self.s.schema,))).fetchall()
+        await self.db.execute(pgsql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(ident(SNAPSHOT)))
+        await self.db.execute(pgsql.SQL("CREATE SCHEMA {}").format(ident(SNAPSHOT)))
+        steps = [pgsql.SQL("SET LOCAL session_replication_role = replica")]
+        if tables:
+            steps.append(pgsql.SQL("TRUNCATE {}").format(pgsql.SQL(", ").join(ident(self.s.schema, t) for t, _ in tables)))
+        for table, columns in tables:
+            cols = pgsql.SQL(", ").join(map(ident, columns))
+            real, copy = ident(self.s.schema, table), ident(SNAPSHOT, table)
+            await self.db.execute(pgsql.SQL("CREATE TABLE {} AS SELECT {} FROM {}").format(copy, cols, real))
+            steps.append(pgsql.SQL("INSERT INTO {} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {}").format(real, cols, cols, copy))
+        for (name,) in sequences:
+            seq = ident(self.s.schema, name)
+            last, called = await (await self.db.execute(pgsql.SQL("SELECT last_value, is_called FROM {}").format(seq))).fetchone()
+            steps.append(pgsql.SQL("SELECT setval({}, {}, {})").format(pgsql.Literal(seq.as_string(self.db)), pgsql.Literal(last), pgsql.Literal(called)))
+        return pgsql.SQL("; ").join(steps)
+
+    async def catalog(self):
+        """Table names, names that hide what they touch, and foreign keys both ways."""
+        found = await (await self.db.execute(NAMES)).fetchall()
+        opaque = {name.lower() for kind, name in found if kind == "opaque"}
+        names = {name.lower() for kind, name in found if kind == "table"}
+        parents, children = {}, {}
+        for child, parent in await (await self.db.execute(LINKS)).fetchall():
+            parents.setdefault(child.lower(), set()).add(parent.lower())
+            children.setdefault(parent.lower(), set()).add(child.lower())
+        return names, opaque, parents, children
 
     async def snapshot(self):
         out = {}
@@ -389,14 +522,62 @@ def shape(sql):
 
 
 def holds(trace):
-    """Every statement A sends after its first is a point to hold A at."""
+    """The statements to hold A before, leaving out holds that repeat a serial order.
+
+    While A has only opened a transaction, letting B run is B then A. Once A
+    has nothing left but handing its connection back, it is A then B.
+    """
     seen = Counter()
     points = []
     for i, sql in enumerate(trace):
         seen[sql] += 1
-        if i:
+        started = any(not CONTROL.match(s) for s in trace[:i])
+        unfinished = any(not (CONTROL.match(s) or POOL_RESET.search(s)) for s in trace[i:])
+        if started and unfinished:
             points.append((sql, seen[sql]))
     return points
+
+
+def footprint(trace, names, opaque, parents, children, changed):
+    """The tables a request touched and the ones it wrote, or None when its SQL cannot tell.
+
+    Every doubt widens the answer, so a pair is only ever skipped when it is safe.
+    """
+    touched, written, roots = set(changed), set(changed), set()
+    for sql in trace:
+        words = set(re.findall(r"\w+", sql.lower()))
+        if words & opaque:
+            return None
+        named = words & names
+        if not named:
+            if DATA.search(sql):
+                return None
+            continue
+        touched |= named
+        if WRITE.search(sql):
+            written |= named
+        if CASCADES.search(sql):
+            roots |= named
+    # a delete or a key update can travel down foreign keys to any depth
+    stack = list(roots)
+    while stack:
+        for child in children.get(stack.pop(), ()):
+            if child not in written:
+                written.add(child)
+                stack.append(child)
+    touched |= written
+    # writing a child row makes Postgres read its parent row
+    touched |= {parent for table in touched for parent in parents.get(table, ())}
+    return touched, written
+
+
+def independent(a, b):
+    """True when neither request writes a table the other touches, so no order can matter."""
+    return a is not None and b is not None and not (a[1] & b[0]) and not (b[1] & a[0])
+
+
+def rows(table):
+    return Counter(map(str, table[1]))
 
 
 def normalize(snapshot, ignored, fks=None):

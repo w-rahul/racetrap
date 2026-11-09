@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from conftest import DSN, needs_db
@@ -25,6 +26,11 @@ def test_finds_the_double_booking(monkeypatch, tmp_path):
     assert race["held_before"].startswith("UPDATE shows")
     assert race["responses"] == {"A": 200, "B": 200}
     assert "final data matches no serial order" in race["reasons"]
+    # the example has no setup SQL, so racetrap restored the data itself and left it as it found it
+    with psycopg.connect(DSN) as db:
+        assert db.execute("SELECT seats_left FROM shows").fetchall() == [(1,)]
+        assert db.execute("SELECT count(*) FROM bookings").fetchone() == (0,)
+        assert db.execute("SELECT to_regnamespace('racetrap_snapshot')").fetchone() == (None,)
 
 
 @needs_db

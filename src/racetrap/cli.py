@@ -35,6 +35,7 @@ def main(argv=None):
     parser.add_argument("scenario", help="scenario file in TOML")
     parser.add_argument("--report", default="racetrap-report.html", help="HTML report path (default: %(default)s)")
     parser.add_argument("--json", metavar="PATH", help="also write the results as JSON to this file")
+    parser.add_argument("--all-pairs", action="store_true", help="test every pair, even two requests that share no tables")
     parser.add_argument("--version", action="version", version=f"racetrap {__version__}")
     args = parser.parse_args(argv)
     try:
@@ -43,7 +44,7 @@ def main(argv=None):
         print(f"racetrap {__version__}")
         print(f"proxy  {scenario.proxy[0]}:{scenario.proxy[1]} -> {host}:{port}")
         print(f"app    {scenario.app}\n")
-        result = run_async(run(scenario, printer(scenario)))
+        result = run_async(run(scenario, printer(scenario), args.all_pairs))
     except (ScenarioError, RunError, psycopg.Error, OSError) as e:
         print(f"racetrap: {e}", file=sys.stderr)
         return 2
@@ -85,7 +86,7 @@ def init(argv):
     except (openapi.InitError, OSError) as e:
         print(f"racetrap: {e}", file=sys.stderr)
         return 2
-    print(f"Wrote {out} with {count} requests. Fill in setup, keep the ones that share data, then run: racetrap {out}")
+    print(f"Wrote {out} with {count} requests. Check the example bodies, then run: racetrap {out}")
     return 0
 
 
@@ -93,14 +94,14 @@ def printer(scenario):
     width = max(len(r.name) for r in scenario.requests)
 
     def show(pair):
-        verdict = "RACE" if pair.races else "ok"
-        orders = f"{len(pair.schedules)} orders"
+        verdict = "RACE" if pair.races else "skipped" if pair.skipped else "ok"
+        orders = "" if pair.skipped else f"{len(pair.schedules)} orders"
         print(f"  {pair.a.name:<{width}}  vs  {pair.b.name:<{width}}  {orders:>9}  {verdict}")
 
     return show
 
 
-async def run(scenario, progress=None):
+async def run(scenario, progress=None, all_pairs=False):
     # libpq can hang on an address that drops packets, like ::1 on some Windows
     # setups, so each address gets a deadline unless the URL sets its own
     options = {} if "connect_timeout" in conninfo_to_dict(scenario.database) else {"connect_timeout": 5}
@@ -122,7 +123,7 @@ async def run(scenario, progress=None):
                 app = start_app(scenario)
             await wait_ready(scenario.app, app)
             alive = (lambda: app[0].poll() is None) if app else None
-            return await Explorer(scenario, db, rec, progress, alive).run()
+            return await Explorer(scenario, db, rec, progress, alive, all_pairs).run()
         finally:
             if app:
                 stop_app(app)

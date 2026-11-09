@@ -41,18 +41,20 @@ racetrap sits between your app and Postgres as a proxy. For every pair of reques
 
 Each forced order gives the same result on every run. There is no load test and no luck involved.
 
+There is nothing to reset by hand. racetrap saves your tables before it starts, puts them back before every order, and leaves the database as it found it. It also skips work that cannot change the answer: pairs of requests that share no tables, and holds that would only repeat a one at a time run.
+
 ```
 $ racetrap examples/tickets/buggy.toml
 racetrap 0.2.0
 proxy  127.0.0.1:6499 -> localhost:5432
 app    http://127.0.0.1:8765
 
-  alice books  vs  alice books   5 orders  RACE
-  alice books  vs  bob books     5 orders  RACE
-  bob books    vs  alice books   5 orders  RACE
-  bob books    vs  bob books     5 orders  RACE
+  alice books  vs  alice books   3 orders  RACE
+  alice books  vs  bob books     3 orders  RACE
+  bob books    vs  alice books   3 orders  RACE
+  bob books    vs  bob books     3 orders  RACE
 
-4 of 4 pairs race. 34 runs in 4.7s.
+4 of 4 pairs race. 38 runs in 5.0s.
 Report: racetrap-report.html
 ```
 
@@ -62,21 +64,23 @@ Report: racetrap-report.html
 
 - **It does not replace transactions, locks or tests.** You keep writing normal code. racetrap shows where the transaction you have is not enough, and the fix stays a line you write: `FOR UPDATE`, a conditional `UPDATE ... WHERE`, a unique constraint, or `SERIALIZABLE` with a retry.
 - **It never changes your code, and it is not for production.** Point it at a test database you can wipe. It only watches and delays SQL.
-- **It is not a load test.** It does not fire thousands of requests and hope. It forces each order once.
+- **It is not a load test.** It does not fire thousands of requests and hope. It forces each order once, and repeats an order that races to confirm it.
 - **It does not see everything.** Postgres only, two requests at a time, and locks held outside Postgres, like Redis or an in-process mutex, are invisible to it.
 
 ## What a pass means
 
 A pass is a bounded guarantee, not a proof that an API has no races.
 
-For every pair of requests in the scenario, and for each request paired with itself, racetrap forces every order of this shape: one request stops right before one of its SQL statements, the other runs until it finishes or waits on a lock, and then the first one continues. A pass means none of those orders gave a result that differs from running the two requests one at a time, starting from the data your `setup` creates, at the isolation level your app uses.
+For every pair of requests in the scenario, and for each request paired with itself, racetrap forces every order of this shape: one request stops right before one of its SQL statements, the other runs until it finishes or waits on a lock, and then the first one continues. A pass means none of those orders gave a result that differs from running the two requests one at a time, starting from the data in the database when racetrap starts, at the isolation level your app uses.
+
+Two kinds of work are left out because they cannot change that answer. A stop is skipped while the first request has only opened a transaction, or has nothing left but handing its connection back, since both are one at a time runs. A pair is skipped when the SQL shows the two requests share no table that either one writes, following foreign keys. A request that calls your own functions, reads a view, or touches a table with triggers is never skipped, and `--all-pairs` turns pair skipping off.
 
 That shape covers the common bugs: lost updates, check then write like the double booking above, write skew between two transactions, and double submits.
 
 A pass says nothing about:
 
 - races that need three or more requests, or more than one switch between the two
-- starting data your `setup` does not create
+- starting data other than what the database holds when racetrap starts
 - effects racetrap does not compare, such as response bodies, emails, queues and caches
 - statements the app sends after it has answered, which racetrap warns about
 - anything guarded outside Postgres
@@ -109,7 +113,7 @@ pip install racetrap
 racetrap init --openapi http://127.0.0.1:8000/openapi.json
 ```
 
-`init` reads JSON or YAML and writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Add the setup SQL, keep the requests that touch shared data, and run `racetrap racetrap.toml`.
+`init` reads JSON or YAML and writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Check the example bodies and run `racetrap racetrap.toml`.
 
 No Python on the machine? The repository has a Dockerfile, and the [reference](https://github.com/w-rahul/racetrap/blob/main/docs/reference.md#docker) shows how to run it.
 
@@ -119,11 +123,6 @@ No Python on the machine? The repository has a Dockerfile, and the [reference](h
 app = "http://127.0.0.1:8000"
 database = "${DATABASE_URL}"
 command = "uvicorn shop:app --port 8000"
-
-setup = [
-    "TRUNCATE orders, stock RESTART IDENTITY",
-    "INSERT INTO stock VALUES (1, 1)",
-]
 
 [[request]]
 name = "alice buys"
@@ -139,11 +138,11 @@ json = { user = "bob" }
 | Key | Meaning |
 | --- | --- |
 | `app` | Base URL of the app. |
-| `database` | The real Postgres, used directly for setup and snapshots. |
-| `setup` | SQL run before every order. It must reset the data. |
+| `database` | The real Postgres. racetrap also connects to it directly, to save, restore and compare the tables. |
 | `[[request]]` | `name`, `path`, and optional `method`, `json` and `headers`. |
 | `command` | Optional. Starts the app with `DATABASE_URL` pointing at the proxy. |
 | `init` | Optional SQL run once before the app starts. |
+| `setup` | Optional SQL run before every order. With it, racetrap resets the data your way and does not save or restore tables. |
 | `invariants` | Optional SQL that must return true after every order. |
 | `ignore` | Optional `table.column` entries to leave out of the comparison. |
 | `refs` | Optional id references without a foreign key, like `{ "orders.user_id" = "users.id" }`. |

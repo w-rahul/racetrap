@@ -27,7 +27,7 @@ class Scenario:
     app: str
     database: str
     requests: list
-    setup: list
+    setup: list = field(default_factory=list)
     init: list = field(default_factory=list)
     invariants: list = field(default_factory=list)
     ignore: set = field(default_factory=set)
@@ -97,7 +97,7 @@ def load(path):
         app=app,
         database=database,
         requests=requests,
-        setup=_sql_list(get("setup", list), "setup", path.name),
+        setup=_sql_list(get("setup", list, []), "setup", path.name),
         init=_sql_list(get("init", list, []), "init", path.name),
         invariants=_sql_list(get("invariants", list, []), "invariants", path.name),
         ignore=ignore,
