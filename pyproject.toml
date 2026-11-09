@@ -1,0 +1,32 @@
+[project]
+name = "deadheat"
+version = "0.1.0"
+description = "Finds race conditions in web APIs by forcing the worst order of their SQL statements."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Rahul Gupta" }]
+keywords = ["race condition", "postgres", "concurrency", "testing", "isolation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Database",
+    "Topic :: Software Development :: Testing",
+]
+dependencies = ["psycopg[binary]>=3.2"]
+
+[project.urls]
+Repository = "https://github.com/w-rahul/deadheat"
+
+[project.scripts]
+deadheat = "deadheat.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "fastapi>=0.115", "uvicorn>=0.30", "asyncpg>=0.30"]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
