@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://pypi.org/project/racetrap/"><img src="https://img.shields.io/pypi/v/racetrap?color=E0483E&label=pypi" alt="PyPI"></a>
   <a href="https://github.com/w-rahul/racetrap/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/w-rahul/racetrap/test.yml?label=tests" alt="Tests"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8D8A84" alt="MIT license"></a>
+  <a href="https://github.com/w-rahul/racetrap/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-8D8A84" alt="MIT license"></a>
 </p>
 
 <p align="center">
@@ -111,7 +111,7 @@ racetrap init --openapi http://127.0.0.1:8000/openapi.json
 
 `init` reads JSON or YAML and writes `racetrap.toml` with one request for every POST, PUT, PATCH and DELETE, filled with example bodies from your schemas. Add the setup SQL, keep the requests that touch shared data, and run `racetrap racetrap.toml`.
 
-No Python on the machine? The repository has a Dockerfile, and the [reference](docs/reference.md#docker) shows how to run it.
+No Python on the machine? The repository has a Dockerfile, and the [reference](https://github.com/w-rahul/racetrap/blob/main/docs/reference.md#docker) shows how to run it.
 
 ## Scenario file
 
@@ -149,7 +149,7 @@ json = { user = "bob" }
 | `refs` | Optional id references without a foreign key, like `{ "orders.user_id" = "users.id" }`. |
 | `proxy`, `database_env`, `schema`, `stall_ms` | Defaults `127.0.0.1:6499`, `DATABASE_URL`, `public` and `1000`. |
 
-`${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits. The [reference](docs/reference.md) covers every key, the command line and the JSON results.
+`${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits. The [reference](https://github.com/w-rahul/racetrap/blob/main/docs/reference.md) covers every key, the command line and the JSON results.
 
 ## Run it in CI
 
