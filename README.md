@@ -4,6 +4,8 @@
 
 Finds race conditions in web APIs by forcing the worst order of their SQL statements.
 
+![racetrap catching a double booking, then passing once the fix is in](docs/demo.gif)
+
 Two requests that hit the same row at the same moment can both win, and your tests will never show it. racetrap sets the trap: it holds one request at each step and lets the other run, until the bug shows up or every order it tried matches a serial run.
 
 ## The bug
