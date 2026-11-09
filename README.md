@@ -1,10 +1,20 @@
-<img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/icon.svg" width="72" alt="">
+<p align="center">
+  <img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/icon.svg" width="96" alt="">
+</p>
 
-# racetrap
+<h1 align="center">racetrap</h1>
 
-Finds race conditions in web APIs by forcing the worst order of their SQL statements.
+<p align="center">Finds race conditions in web APIs by forcing the worst order of their SQL statements.</p>
 
-![racetrap catching a double booking, then passing once the fix is in](https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/demo.gif)
+<p align="center">
+  <a href="https://pypi.org/project/racetrap/"><img src="https://img.shields.io/pypi/v/racetrap?color=E0483E&label=pypi" alt="PyPI"></a>
+  <a href="https://github.com/w-rahul/racetrap/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/w-rahul/racetrap/test.yml?label=tests" alt="Tests"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-8D8A84" alt="MIT license"></a>
+</p>
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/demo.gif" width="100%" alt="racetrap catching a double booking, then passing once the fix is in">
+</p>
 
 ## Why it exists
 
