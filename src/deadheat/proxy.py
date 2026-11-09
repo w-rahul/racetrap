@@ -115,13 +115,23 @@ class Proxy:
                 return
 
     async def _downstream(self, conn, ureader, cwriter):
+        rows = 0
         while True:
             kind, body, raw = await wire.read_message(ureader)
-            if kind == b"K":
+            if kind == b"D":
+                rows += 1
+            elif kind == b"K":
                 conn.pid = wire.backend_pid(body)
             elif kind == b"C":
                 self.hooks.done(conn, tag=wire.cstring(body)[0])
+                rows = 0
+            elif kind == b"s":
+                # asyncpg's fetchval asks for one row, which ends the portal
+                # with PortalSuspended instead of CommandComplete
+                self.hooks.done(conn, tag=f"{rows} row" + ("" if rows == 1 else "s"))
+                rows = 0
             elif kind == b"E":
                 self.hooks.done(conn, error=wire.error_fields(body))
+                rows = 0
             cwriter.write(raw)
             await cwriter.drain()

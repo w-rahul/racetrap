@@ -9,17 +9,15 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import psycopg
 
 from . import __version__
-from .explore import Explorer, Recorder
+from .explore import Explorer, Recorder, RunError
 from .proxy import Proxy
+from .report import render
 from .scenario import ScenarioError, load
-
-
-class AppError(Exception):
-    pass
 
 
 def main(argv=None):
@@ -38,7 +36,7 @@ def main(argv=None):
         print(f"proxy  {scenario.proxy[0]}:{scenario.proxy[1]} -> {host}:{port}")
         print(f"app    {scenario.app}\n")
         result = run_async(run(scenario, printer(scenario)))
-    except (ScenarioError, AppError, psycopg.Error, OSError) as e:
+    except (ScenarioError, RunError, psycopg.Error, OSError) as e:
         print(f"deadheat: {e}", file=sys.stderr)
         return 2
     except KeyboardInterrupt:
@@ -49,6 +47,11 @@ def main(argv=None):
         print(f"warning: {w}")
     summary = f"{len(racing)} of {len(result.pairs)} pairs race." if racing else f"No races in {len(result.pairs)} pairs."
     print(f"\n{summary} {result.runs} runs in {result.seconds:.1f}s.")
+    try:
+        Path(args.report).write_text(render(scenario, result), encoding="utf-8")
+        print(f"Report: {args.report}")
+    except OSError as e:
+        print(f"deadheat: could not write the report: {e}", file=sys.stderr)
     return 1 if racing else 0
 
 
@@ -125,13 +128,13 @@ async def wait_ready(url, app, timeout=30):
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         if app and app[0].poll() is not None:
-            raise AppError(f"app exited with code {app[0].returncode}\n{tail(app[1])}")
+            raise RunError(f"app exited with code {app[0].returncode}\n{tail(app[1])}")
         try:
             await asyncio.to_thread(ping, opener, url)
             return
         except OSError:
             await asyncio.sleep(0.2)
-    raise AppError(f"app at {url} did not answer within {timeout}s\n{tail(app[1]) if app else ''}")
+    raise RunError(f"app at {url} did not answer within {timeout}s\n{tail(app[1]) if app else ''}")
 
 
 def ping(opener, url):
