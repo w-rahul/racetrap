@@ -115,7 +115,7 @@ class Recorder(Hooks):
         self.begin()
 
     def begin(self, hold=None):
-        self.t0 = self.active = time.monotonic()
+        self.t0 = self.active = time.perf_counter()
         self.last = {}
         self.events = []
         self.who = "A"
@@ -169,12 +169,12 @@ class Recorder(Hooks):
 
     async def quiet(self, gap=0.05, limit=3.0):
         """Wait until the app has sent nothing for `gap` seconds."""
-        end = time.monotonic() + limit
-        while time.monotonic() < end and time.monotonic() - self.active < gap:
+        end = time.perf_counter() + limit
+        while time.perf_counter() < end and time.perf_counter() - self.active < gap:
             await asyncio.sleep(gap / 4)
 
     def _log(self, conn, kind, text, who=None):
-        self.active = time.monotonic()
+        self.active = time.perf_counter()
         who = who or self.owner.get(conn.id, "?")
         self.last[who] = self.active
         self.events.append(Event(self.active - self.t0, who, conn.id, kind, text))
@@ -196,7 +196,7 @@ class Explorer:
             self.warnings.append(message)
 
     async def run(self):
-        start = time.monotonic()
+        start = time.perf_counter()
         self.tables, self.ignored, self.fks = await self.introspect()
         self.ignored |= self.s.ignore
         self.fks.update(self.s.refs)
@@ -223,7 +223,7 @@ class Explorer:
                 pairs.append(await self.pair(a, b, traces[a.name]))
                 self.progress(pairs[-1])
         ignored = set().union(*(p.ignored for p in pairs))
-        return Result(pairs, ignored, self.fks, self.runs, time.monotonic() - start, self.warnings)
+        return Result(pairs, ignored, self.fks, self.runs, time.perf_counter() - start, self.warnings)
 
     async def learn_background(self, seconds=1.0):
         """Watch the app with no request in flight. What it sends then is its own."""
@@ -274,7 +274,7 @@ class Explorer:
                 await rec.quiet()
                 return None
             rec.who = "B"
-            started = time.monotonic()
+            started = time.perf_counter()
             task_b = asyncio.create_task(self.send(b))
             how = await self.watch(task_b, rec.held.pid, started)
             rec.release()
@@ -295,7 +295,7 @@ class Explorer:
             if pids and await self.fetch(BLOCKED, (pids, held_pid)):
                 return "blocked"
             # B's own silence counts, so SQL the app sends by itself cannot keep A held
-            if time.monotonic() - max(started, self.rec.last.get("B", started)) > self.s.stall:
+            if time.perf_counter() - max(started, self.rec.last.get("B", started)) > self.s.stall:
                 return "stalled"
 
     async def serial(self, order):
