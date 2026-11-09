@@ -111,6 +111,7 @@ class Recorder(Hooks):
 
     def __init__(self):
         self.conns = {}
+        self.background = set()
         self.begin()
 
     def begin(self, hold=None):
@@ -132,9 +133,16 @@ class Recorder(Hooks):
         self.conns.pop(conn.id, None)
 
     async def before(self, conn, sqls):
+        if all(shape(s) in self.background for s in sqls):
+            # the app sends this on its own, like a poller, so no request owns it
+            self.owner[conn.id] = "bg"
+            for sql in sqls:
+                self._log(conn, "sql", sql)
+            return
         # shortcut: after A is released, a connection B never used counts as A's.
         # Only the report timeline depends on it, never the verdict.
-        who = self.who or self.owner.get(conn.id, "A")
+        owner = self.owner.get(conn.id)
+        who = self.who or (owner if owner in ("A", "B") else "A")
         self.owner[conn.id] = who
         if who == "A" and self.hold and not self.reached.is_set():
             self.seen.update(shape(s) for s in sqls)
@@ -192,6 +200,7 @@ class Explorer:
         self.tables, self.ignored, self.fks = await self.introspect()
         self.ignored |= self.s.ignore
         self.fks.update(self.s.refs)
+        await self.learn_background()
         traces = {}
         for r in self.s.requests:
             first = await self.serial([("A", r)])
@@ -201,7 +210,7 @@ class Explorer:
                 self.warn(f"{r.name} answered {first.statuses['A']} then {again.statuses['A']} from the same state")
             for q in first.failed:
                 self.warn(f"invariant fails after {r.name} alone: {q}")
-            traces[r.name] = [shape(e.text) for e in first.events if e.kind == "sql"]
+            traces[r.name] = [shape(e.text) for e in first.events if e.kind == "sql" and e.who != "bg"]
             if not traces[r.name]:
                 self.warn(f"{r.name} sent no SQL, so nothing can race with it")
         if not any(traces.values()):
@@ -215,6 +224,16 @@ class Explorer:
                 self.progress(pairs[-1])
         ignored = set().union(*(p.ignored for p in pairs))
         return Result(pairs, ignored, self.fks, self.runs, time.monotonic() - start, self.warnings)
+
+    async def learn_background(self, seconds=1.0):
+        """Watch the app with no request in flight. What it sends then is its own."""
+        self.rec.begin()
+        self.rec.who = "bg"
+        await asyncio.sleep(seconds)
+        self.rec.background = {shape(e.text) for e in self.rec.events if e.kind == "sql"}
+        if self.rec.background:
+            listed = " | ".join(" ".join(s.split()) for s in sorted(self.rec.background))[:200]
+            self.warn(f"the app sends SQL on its own, which is left out of every request: {listed}")
 
     async def pair(self, a, b, trace):
         ab = await self.serial([("A", a), ("B", b)])

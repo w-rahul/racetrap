@@ -43,7 +43,7 @@ json = { user = "bob" }
 
 
 @needs_db
-@pytest.mark.parametrize("path", ["/signup", "/book", "/visit"])
+@pytest.mark.parametrize("path", ["/signup", "/book", "/visit", "/take"])
 def test_race_free_endpoint_passes(tmp_path, monkeypatch, path):
     monkeypatch.setenv("DATABASE_URL", DSN)
     text = SCENARIO.replace("APP_DIR", str(Path(__file__).parent)).replace("PATH", path)
@@ -55,5 +55,11 @@ def test_race_free_endpoint_passes(tmp_path, monkeypatch, path):
         return await asyncio.wait_for(run(scenario), 120)
 
     result = run_async(bounded())
-    assert all(p.schedules for p in result.pairs), "every pair was explored"
+    if path == "/visit":
+        # its writes happen after the response, so deadheat must say it could not test them
+        assert any("not tested" in w for w in result.warnings)
+    else:
+        assert all(p.schedules for p in result.pairs), "every pair was explored"
     assert not [p for p in result.pairs if p.races]
+    # B waiting on the app's lock is released after stall_ms, not after a 30 s timeout
+    assert result.seconds < 30

@@ -123,7 +123,7 @@ def rows_table(cols, rows, limit=8):
 
 def timeline(events, held, a, b):
     rows, open_rows, waiting = [], {}, False
-    for e in events:
+    for e in (e for e in events if e.who != "bg"):
         if e.kind in ("ok", "error") and e.conn in open_rows:
             row = open_rows[e.conn]
             # deadheat polls for lock waits every 20 ms, so anything quicker

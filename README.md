@@ -43,7 +43,7 @@ app    http://127.0.0.1:8765
   bob books    vs  alice books   5 orders  RACE
   bob books    vs  bob books     5 orders  RACE
 
-4 of 4 pairs race. 34 runs in 3.7s.
+4 of 4 pairs race. 34 runs in 4.8s.
 Report: deadheat-report.html
 ```
 
@@ -56,7 +56,7 @@ Add `FOR UPDATE` to the read and run it again:
 ```
 $ deadheat examples/tickets/fixed.toml
   ...
-No races in 4 pairs. 34 runs in 3.8s.
+No races in 4 pairs. 34 runs in 4.8s.
 ```
 
 ## Try it
@@ -140,7 +140,7 @@ The exit code is 1 when any pair races, so it can fail a CI job.
 - Two requests at a time. A race that needs three is not explored.
 - Locks outside Postgres, like Redis or an in-process mutex, are invisible. deadheat waits `stall_ms` and then releases A.
 - It holds between statements, not inside one.
-- SQL the app sends on its own during a run, like a poller, counts as part of the request that is running.
+- Before testing, deadheat watches the app sit idle for one second and leaves out any SQL it sends on its own, like a poller. Background work that runs less often than that counts as part of whichever request is running.
 - Every run snapshots every table in the schema. Use a small test database.
 - The app needs a connection pool of at least two, or B can never start while A is held.
 

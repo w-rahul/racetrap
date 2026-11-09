@@ -14,14 +14,24 @@ class User(BaseModel):
     user: str
 
 
+async def poll(pool):
+    """SQL the app sends on its own, with no request in flight."""
+    while True:
+        await pool.fetchval("SELECT count(*) FROM visits")
+        await asyncio.sleep(0.3)
+
+
 @asynccontextmanager
 async def lifespan(app):
     app.state.pool = await asyncpg.create_pool(os.environ["DATABASE_URL"], min_size=2)
+    poller = asyncio.create_task(poll(app.state.pool))
     yield
+    poller.cancel()
     await app.state.pool.close()
 
 
 app = FastAPI(lifespan=lifespan)
+lock = asyncio.Lock()
 
 
 @app.post("/signup")
@@ -60,3 +70,12 @@ async def log_visit(user):
     async with app.state.pool.acquire() as conn, conn.transaction():
         await conn.execute("UPDATE counters SET n = n + 1 WHERE id = 1")
         await conn.execute("INSERT INTO visits (user_name) VALUES ($1)", user)
+
+
+@app.post("/take")
+async def take(body: User):
+    """Serialized by a lock inside the app, which Postgres cannot see."""
+    async with lock, app.state.pool.acquire() as conn:
+        n = await conn.fetchval("SELECT n FROM counters WHERE id = 1")
+        await conn.execute("UPDATE counters SET n = $1 WHERE id = 1", n + 1)
+    return {}
