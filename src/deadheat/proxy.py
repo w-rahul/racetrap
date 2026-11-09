@@ -73,7 +73,9 @@ class Proxy:
             # Plain TCP only. Clients on sslmode=prefer retry without TLS.
             cwriter.write(b"N")
             code, raw = await wire.read_startup(creader)
-        ureader, uwriter = await asyncio.open_connection(*self.upstream)
+        # localhost often resolves to ::1 first. Racing IPv4 after 250 ms keeps a
+        # refused IPv6 attempt from costing seconds on every new connection.
+        ureader, uwriter = await asyncio.open_connection(*self.upstream, happy_eyeballs_delay=0.25)
         try:
             uwriter.write(raw)
             if code == wire.CANCEL_REQUEST:

@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 
 import psycopg
+from psycopg.conninfo import conninfo_to_dict
 
 from . import __version__
 from .explore import Explorer, Recorder, RunError
@@ -67,7 +68,10 @@ def printer(scenario):
 
 
 async def run(scenario, progress=None):
-    db = await psycopg.AsyncConnection.connect(scenario.database, autocommit=True)
+    # libpq can hang on an address that drops packets, like ::1 on some Windows
+    # setups, so each address gets a deadline unless the URL sets its own
+    options = {} if "connect_timeout" in conninfo_to_dict(scenario.database) else {"connect_timeout": 5}
+    db = await psycopg.AsyncConnection.connect(scenario.database, autocommit=True, **options)
     try:
         # a lock the app leaves behind should fail the run, not hang it
         await db.execute("SET lock_timeout = '5s'")
