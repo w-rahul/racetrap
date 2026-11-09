@@ -31,7 +31,7 @@ class Scenario:
     init: list = field(default_factory=list)
     invariants: list = field(default_factory=list)
     ignore: set = field(default_factory=set)
-    proxy: tuple = ("127.0.0.1", 6432)
+    proxy: tuple = ("127.0.0.1", 6499)
     command: str | None = None
     database_env: str = "DATABASE_URL"
     schema: str = "public"
@@ -70,9 +70,9 @@ def load(path):
     if len(set(names)) != len(names):
         raise ScenarioError(f"{path.name}: request names must be unique")
 
-    host, _, port = get("proxy", str, "127.0.0.1:6432").rpartition(":")
+    host, _, port = get("proxy", str, "127.0.0.1:6499").rpartition(":")
     if not host or not port.isdigit():
-        raise ScenarioError(f"{path.name}: proxy must look like 127.0.0.1:6432")
+        raise ScenarioError(f"{path.name}: proxy must look like 127.0.0.1:6499")
 
     ignore = set()
     for item in get("ignore", list, []):
@@ -120,8 +120,8 @@ def _request(raw, i, where):
         raise ScenarioError(f"{where}: request {i + 1} must be a table")
     get = _getter(raw, f"{where} request {i + 1}")
     path = get("path", str)
-    if not path.startswith("/"):
-        raise ScenarioError(f"{where}: request path {path!r} must start with /")
+    if not path.startswith("/") or any(c.isspace() for c in path):
+        raise ScenarioError(f"{where}: request path {path!r} must start with / and have no spaces")
     return Request(
         name=get("name", str),
         method=get("method", str, "POST" if "json" in raw else "GET").upper(),

@@ -1,0 +1,26 @@
+# One seat left. Alice and Bob both try to book it.
+
+app = "http://127.0.0.1:8765"
+database = "${DATABASE_URL}"
+command = "python -m uvicorn app:app --port 8765 --log-level warning"
+
+init = [
+    "DROP TABLE IF EXISTS bookings, shows",
+    "CREATE TABLE shows (id int PRIMARY KEY, title text NOT NULL, seats_left int NOT NULL)",
+    "CREATE TABLE bookings (id serial PRIMARY KEY, show_id int NOT NULL REFERENCES shows, user_name text NOT NULL)",
+]
+
+setup = [
+    "TRUNCATE bookings, shows RESTART IDENTITY",
+    "INSERT INTO shows VALUES (1, 'Dune', 1)",
+]
+
+[[request]]
+name = "alice books"
+path = "/shows/1/book"
+json = { user = "alice" }
+
+[[request]]
+name = "bob books"
+path = "/shows/1/book"
+json = { user = "bob" }
