@@ -1,10 +1,10 @@
-<img src="docs/icon.svg" width="72" alt="">
+<img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/icon.svg" width="72" alt="">
 
 # racetrap
 
 Finds race conditions in web APIs by forcing the worst order of their SQL statements.
 
-![racetrap catching a double booking, then passing once the fix is in](docs/demo.gif)
+![racetrap catching a double booking, then passing once the fix is in](https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/demo.gif)
 
 ## Why it exists
 
@@ -46,7 +46,7 @@ app    http://127.0.0.1:8765
 Report: racetrap-report.html
 ```
 
-![The report for one race: both requests as lanes, the hold, the outcome and the fix](docs/report.png)
+![The report for one race: both requests as lanes, the hold, the outcome and the fix](https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/report.png)
 
 ## What it does not do
 
@@ -54,6 +54,10 @@ Report: racetrap-report.html
 - **It never changes your code, and it is not for production.** Point it at a test database you can wipe. It only watches and delays SQL.
 - **It is not a load test.** It does not fire thousands of requests and hope. It forces each order once.
 - **It does not see everything.** Postgres only, two requests at a time, and locks held outside Postgres, like Redis or an in-process mutex, are invisible to it.
+
+## Benchmark
+
+`benchmarks/burst.py` does what people try without racetrap: it fires alice and bob at the same instant, 1,000 times, on the ticket example. On one Windows machine it caught the double booking in 68.5%, 81.6% and 79.8% of bursts across three runs, and the rate changed every time. racetrap caught it on every run, in all 4 pairs, named the exact order of statements, and checked the fix against every order it forced.
 
 ## Try it
 
