@@ -15,7 +15,7 @@ from pathlib import Path
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
-from . import __version__
+from . import __version__, openapi
 from .explore import Explorer, Recorder, RunError
 from .proxy import Proxy
 from .report import render
@@ -23,9 +23,13 @@ from .scenario import ScenarioError, load
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["init"]:
+        return init(argv[1:])
     parser = argparse.ArgumentParser(
         prog="racetrap",
         description="Find race conditions in a web API by forcing the worst order of its SQL.",
+        epilog="Start a scenario from an OpenAPI document with: racetrap init --openapi URL",
     )
     parser.add_argument("scenario", help="scenario file in TOML")
     parser.add_argument("--report", default="racetrap-report.html", help="HTML report path (default: %(default)s)")
@@ -55,6 +59,28 @@ def main(argv=None):
     except OSError as e:
         print(f"racetrap: could not write the report: {e}", file=sys.stderr)
     return 1 if racing else 0
+
+
+def init(argv):
+    parser = argparse.ArgumentParser(prog="racetrap init", description="Write a starting scenario file from an OpenAPI document.")
+    parser.add_argument("--openapi", required=True, help="path or URL of the OpenAPI JSON, like http://127.0.0.1:8000/openapi.json")
+    parser.add_argument("--app", help="base URL of the app (default: from the URL or the spec's servers)")
+    parser.add_argument("-o", "--output", default="racetrap.toml", help="file to write (default: %(default)s)")
+    parser.add_argument("--force", action="store_true", help="overwrite the output file if it exists")
+    args = parser.parse_args(argv)
+    out = Path(args.output)
+    if out.exists() and not args.force:
+        print(f"racetrap: {out} already exists. Pass --force to overwrite it.", file=sys.stderr)
+        return 2
+    try:
+        spec = openapi.load_spec(args.openapi)
+        text, count = openapi.scenario(spec, args.openapi, args.app or openapi.default_app(spec, args.openapi), out.name)
+        out.write_text(text, encoding="utf-8")
+    except (openapi.InitError, OSError) as e:
+        print(f"racetrap: {e}", file=sys.stderr)
+        return 2
+    print(f"Wrote {out} with {count} requests. Fill in setup, keep the ones that share data, then run: racetrap {out}")
+    return 0
 
 
 def printer(scenario):
