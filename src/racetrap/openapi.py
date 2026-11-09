@@ -6,6 +6,8 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import yaml
+
 WRITES = ("post", "put", "patch", "delete")
 BARE_KEY = re.compile(r"^[A-Za-z0-9_-]+$")
 PARAM = re.compile(r"\{([^}]+)\}")
@@ -48,8 +50,10 @@ def load_spec(source):
     try:
         spec = json.loads(text)
     except json.JSONDecodeError:
-        # shortcut: JSON only. Add PyYAML if people ask for YAML specs.
-        raise InitError("racetrap init reads OpenAPI as JSON. FastAPI serves it at /openapi.json") from None
+        try:
+            spec = yaml.safe_load(text)
+        except yaml.YAMLError as e:
+            raise InitError(f"could not read the OpenAPI document as JSON or YAML: {' '.join(str(e).split())}") from None
     if not isinstance(spec, dict) or "paths" not in spec:
         raise InitError("that file has no 'paths', so it is not an OpenAPI document")
     return spec
@@ -202,4 +206,5 @@ def toml_value(value):
 
 
 def toml_key(key):
+    key = str(key)  # YAML allows keys that are numbers
     return key if BARE_KEY.match(key) else json.dumps(key, ensure_ascii=False)

@@ -63,6 +63,33 @@ def render(scenario, result):
     return PAGE.replace("{body}", "\n".join(parts))
 
 
+def summary(scenario, result):
+    """The result as plain data, for --json."""
+    return {
+        "racetrap": __version__,
+        "scenario": scenario.path.name,
+        "app": scenario.app,
+        "runs": result.runs,
+        "seconds": round(result.seconds, 2),
+        "racing_pairs": sum(bool(p.races) for p in result.pairs),
+        "warnings": result.warnings,
+        "ignored_columns": [f"{t}.{c}" for t, c in sorted(result.ignored)],
+        "pairs": [
+            {
+                "a": p.a.name,
+                "b": p.b.name,
+                "orders": len(p.schedules),
+                "responses": {"a_then_b": p.serials[0].statuses, "b_then_a": p.serials[1].statuses},
+                "races": [
+                    {"held_before": r.hold[0], "occurrence": r.hold[1], "responses": r.outcome.statuses, "reasons": r.reasons}
+                    for r in p.races
+                ],
+            }
+            for p in result.pairs
+        ],
+    }
+
+
 def names(pair):
     a, b = pair.a.name, pair.b.name
     return a, (f"{b} again" if pair.a is pair.b else b)

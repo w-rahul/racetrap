@@ -79,3 +79,44 @@ def test_init_writes_a_file_racetrap_can_load(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/shop")
     assert [r.path for r in load(out).requests] == ["/shows/1/book", "/coupons/SUMMER"]
     assert main(["init", "--openapi", str(spec_file), "-o", str(out)]) == 2, "it does not overwrite by default"
+
+
+YAML_SPEC = """
+openapi: 3.0.3
+paths:
+  /orders/{order_id}/pay:
+    post:
+      summary: Pay
+      parameters:
+        - name: order_id
+          in: path
+          schema: {type: integer}
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                amount: {type: number}
+                due: {type: string, format: date, example: 2026-01-31}
+"""
+
+
+def test_init_reads_yaml(tmp_path, monkeypatch):
+    spec_file = tmp_path / "openapi.yaml"
+    spec_file.write_text(YAML_SPEC, encoding="utf-8")
+    out = tmp_path / "racetrap.toml"
+    assert main(["init", "--openapi", str(spec_file), "-o", str(out)]) == 0
+    monkeypatch.setenv("DATABASE_URL", "postgresql://localhost/shop")
+    (request,) = load(out).requests
+    assert (request.method, request.path) == ("POST", "/orders/1/pay")
+    # YAML turns a bare date into a date object, which must come out as text
+    assert request.json == {"amount": 1.5, "due": "2026-01-31"}
+
+
+@pytest.mark.parametrize("text, error", [("a: [unclosed", "JSON or YAML"), ("just: text", "no 'paths'")])
+def test_init_rejects_what_is_not_openapi(tmp_path, capsys, text, error):
+    spec_file = tmp_path / "spec.yaml"
+    spec_file.write_text(text, encoding="utf-8")
+    assert main(["init", "--openapi", str(spec_file), "-o", str(tmp_path / "out.toml")]) == 2
+    assert error in capsys.readouterr().err

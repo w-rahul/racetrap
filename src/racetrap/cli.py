@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import http.client
+import json
 import os
 import shlex
 import shutil
@@ -18,7 +19,7 @@ from psycopg.conninfo import conninfo_to_dict
 from . import __version__, openapi
 from .explore import Explorer, Recorder, RunError
 from .proxy import Proxy
-from .report import render
+from .report import render, summary
 from .scenario import ScenarioError, load
 
 
@@ -33,6 +34,7 @@ def main(argv=None):
     )
     parser.add_argument("scenario", help="scenario file in TOML")
     parser.add_argument("--report", default="racetrap-report.html", help="HTML report path (default: %(default)s)")
+    parser.add_argument("--json", metavar="PATH", help="also write the results as JSON to this file")
     parser.add_argument("--version", action="version", version=f"racetrap {__version__}")
     args = parser.parse_args(argv)
     try:
@@ -51,19 +53,23 @@ def main(argv=None):
     racing = [p for p in result.pairs if p.races]
     for w in result.warnings:
         print(f"warning: {w}")
-    summary = f"{len(racing)} of {len(result.pairs)} pairs race." if racing else f"No races in {len(result.pairs)} pairs."
-    print(f"\n{summary} {result.runs} runs in {result.seconds:.1f}s.")
-    try:
-        Path(args.report).write_text(render(scenario, result), encoding="utf-8")
-        print(f"Report: {args.report}")
-    except OSError as e:
-        print(f"racetrap: could not write the report: {e}", file=sys.stderr)
+    verdict = f"{len(racing)} of {len(result.pairs)} pairs race." if racing else f"No races in {len(result.pairs)} pairs."
+    print(f"\n{verdict} {result.runs} runs in {result.seconds:.1f}s.")
+    outputs = [("Report", args.report, lambda: render(scenario, result))]
+    if args.json:
+        outputs.append(("JSON", args.json, lambda: json.dumps(summary(scenario, result), indent=2) + "\n"))
+    for label, path, make in outputs:
+        try:
+            Path(path).write_text(make(), encoding="utf-8")
+            print(f"{label}: {path}")
+        except OSError as e:
+            print(f"racetrap: could not write {path}: {e}", file=sys.stderr)
     return 1 if racing else 0
 
 
 def init(argv):
     parser = argparse.ArgumentParser(prog="racetrap init", description="Write a starting scenario file from an OpenAPI document.")
-    parser.add_argument("--openapi", required=True, help="path or URL of the OpenAPI JSON, like http://127.0.0.1:8000/openapi.json")
+    parser.add_argument("--openapi", required=True, help="path or URL of the OpenAPI document, JSON or YAML, like http://127.0.0.1:8000/openapi.json")
     parser.add_argument("--app", help="base URL of the app (default: from the URL or the spec's servers)")
     parser.add_argument("-o", "--output", default="racetrap.toml", help="file to write (default: %(default)s)")
     parser.add_argument("--force", action="store_true", help="overwrite the output file if it exists")

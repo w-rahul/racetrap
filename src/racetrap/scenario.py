@@ -84,7 +84,7 @@ def load(path):
         raise ScenarioError(f"{path.name}: app must start with http:// or https://")
     database = _expand(get("database", str))
     try:
-        urlsplit(database).port
+        _ = urlsplit(database).port  # raises when the port is not a valid number
     except ValueError:
         raise ScenarioError(f"{path.name}: database URL has an invalid port") from None
     stall = get("stall_ms", int, 1000)

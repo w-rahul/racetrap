@@ -278,7 +278,7 @@ class Explorer:
             task_b = asyncio.create_task(self.send(b))
             how = await self.watch(task_b, rec.held.pid, started)
             rec.release()
-            statuses = dict(zip("AB", await asyncio.gather(task_a, task_b)))
+            statuses = dict(zip("AB", await asyncio.gather(task_a, task_b), strict=True))
         finally:
             rec.release()
             reached.cancel()
@@ -365,7 +365,7 @@ def judge(outcome, serials, ignored, fks=None):
     state = normalize(outcome.snapshot, ignored, fks)
     states = [normalize(s.snapshot, ignored, fks) for s in serials]
     reasons = []
-    if not any(outcome.statuses == s.statuses and state == st for s, st in zip(serials, states)):
+    if not any(outcome.statuses == s.statuses and state == st for s, st in zip(serials, states, strict=True)):
         if not any(outcome.statuses == s.statuses for s in serials):
             reasons.append("responses match no serial order")
         if not any(state == st for st in states):
@@ -421,7 +421,7 @@ def normalize(snapshot, ignored, fks=None):
 
     def label(table, row, depth=0):
         out = []
-        for col, value in zip(snapshot[table][0], row):
+        for col, value in zip(snapshot[table][0], row, strict=True):
             if (table, col) in ignored:
                 continue
             target = refs.get((table, col))

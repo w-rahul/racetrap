@@ -2,6 +2,7 @@ import asyncio
 
 import asyncpg
 import psycopg
+import psycopg2
 
 from conftest import DSN, needs_db
 from racetrap.cli import run_async
@@ -70,3 +71,33 @@ def test_held_statement_waits_for_release():
         return result
 
     assert run_async(go()) == 7
+
+
+@needs_db
+def test_records_and_holds_psycopg2():
+    """psycopg2 sends plain text queries with the values already written in."""
+
+    def query(url):
+        conn = psycopg2.connect(url)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT %s::int + 1", (41,))
+                return cur.fetchone()[0]
+        finally:
+            conn.close()
+
+    async def go():
+        tape = Tape(hold="41::int")
+        proxy, url = await started(tape)
+        task = asyncio.create_task(asyncio.to_thread(query, url))
+        await tape.reached.wait()
+        await asyncio.sleep(0.2)
+        assert not task.done()
+        tape.gate.set()
+        result = await task
+        await proxy.close()
+        return tape, result
+
+    tape, result = run_async(go())
+    assert result == 42
+    assert "SELECT 41::int + 1" in tape.sqls

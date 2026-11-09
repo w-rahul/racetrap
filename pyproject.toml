@@ -12,20 +12,44 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Database",
     "Topic :: Software Development :: Testing",
 ]
-dependencies = ["psycopg[binary]>=3.2"]
+dependencies = ["psycopg[binary]>=3.2", "pyyaml>=6"]
 
 [project.urls]
 Repository = "https://github.com/w-rahul/racetrap"
+Documentation = "https://github.com/w-rahul/racetrap/blob/main/docs/reference.md"
+Changelog = "https://github.com/w-rahul/racetrap/blob/main/CHANGELOG.md"
+Issues = "https://github.com/w-rahul/racetrap/issues"
 
 [project.scripts]
 racetrap = "racetrap.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "fastapi>=0.115", "uvicorn>=0.30", "asyncpg>=0.30"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "asyncpg>=0.30",
+    "psycopg2-binary>=2.9.10",
+]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+# the report keeps its CSS one rule per line, so long lines are fine
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["racetrap", "conftest"]
 
 [build-system]
 requires = ["hatchling>=1.27"]

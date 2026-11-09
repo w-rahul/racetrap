@@ -1,22 +1,30 @@
+import json
 from pathlib import Path
 
 import pytest
 
 from conftest import DSN, needs_db
-from racetrap.cli import run, run_async
-from racetrap.report import render
+from racetrap.cli import main, run, run_async
 from racetrap.scenario import load
 
 TICKETS = Path(__file__).parent.parent / "examples" / "tickets"
 
 
 @needs_db
-def test_finds_the_double_booking(monkeypatch):
+def test_finds_the_double_booking(monkeypatch, tmp_path):
+    """The whole command: exit code 1, an HTML report and the JSON results."""
     monkeypatch.setenv("DATABASE_URL", DSN)
-    scenario = load(TICKETS / "buggy.toml")
-    result = run_async(run(scenario))
-    assert len(result.pairs) == 4 and all(p.races for p in result.pairs)
-    assert "4 of 4 pairs race" in render(scenario, result)
+    report, results = tmp_path / "report.html", tmp_path / "results.json"
+    assert main([str(TICKETS / "buggy.toml"), "--report", str(report), "--json", str(results)]) == 1
+    assert "4 of 4 pairs race" in report.read_text(encoding="utf-8")
+    data = json.loads(results.read_text(encoding="utf-8"))
+    assert data["racing_pairs"] == 4 and len(data["pairs"]) == 4
+    pair = next(p for p in data["pairs"] if (p["a"], p["b"]) == ("alice books", "bob books"))
+    assert pair["responses"] == {"a_then_b": {"A": 200, "B": 409}, "b_then_a": {"B": 200, "A": 409}}
+    race = pair["races"][0]
+    assert race["held_before"].startswith("UPDATE shows")
+    assert race["responses"] == {"A": 200, "B": 200}
+    assert "final data matches no serial order" in race["reasons"]
 
 
 @needs_db
