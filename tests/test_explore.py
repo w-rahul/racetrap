@@ -1,6 +1,6 @@
 from collections import Counter
 
-from deadheat.explore import Event, Outcome, holds, judge, normalize, unstable
+from deadheat.explore import Event, Outcome, holds, judge, normalize, shape, unstable
 
 IGNORED = {("bookings", "id")}
 
@@ -55,3 +55,32 @@ def test_unstable_finds_columns_that_change_between_identical_runs():
     first = {"t": (["id", "updated_at", "n"], [(1, "10:00:01", 5)])}
     again = {"t": (["id", "updated_at", "n"], [(1, "10:00:02", 5)])}
     assert unstable(first, again) == {("t", "updated_at")}
+
+
+def test_an_invariant_broken_in_every_serial_order_is_not_a_race():
+    serials = [outcome(200, 409, "alice", failed=["Q"]), outcome(409, 200, "bob", failed=["Q"])]
+    assert judge(outcome(409, 200, "bob", failed=["Q"]), serials, IGNORED) == []
+
+
+def signup(accounts, memberships):
+    return {
+        "users": (["id", "name"], [(1, "alice"), (2, "bob")]),
+        "accounts": (["id", "name"], accounts),
+        "memberships": (["user_id", "account_id"], memberships),
+    }
+
+
+def test_generated_ids_compare_by_the_rows_they_point_to():
+    ignored = {("users", "id"), ("accounts", "id")}
+    fks = {("memberships", "user_id"): ("users", "id"), ("memberships", "account_id"): ("accounts", "id")}
+    serial = normalize(signup([(1, "alice"), (2, "bob")], [(1, 1), (2, 2)]), ignored, fks)
+    # bob's account got id 1 this time, and every link still points to the right owner
+    swapped = signup([(1, "bob"), (2, "alice")], [(1, 2), (2, 1)])
+    crossed = signup([(1, "bob"), (2, "alice")], [(1, 1), (2, 2)])
+    assert normalize(swapped, ignored, fks) == serial
+    assert normalize(crossed, ignored, fks) != serial
+
+
+def test_shape_blanks_literals_but_keeps_placeholders():
+    assert shape("UPDATE t SET n = 5, s = 'it''s' WHERE id = 12") == "UPDATE t SET n = ?, s = ? WHERE id = ?"
+    assert shape("SELECT * FROM t1 WHERE id = $1") == "SELECT * FROM t1 WHERE id = $1"

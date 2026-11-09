@@ -5,7 +5,7 @@ import re
 from datetime import datetime
 
 from . import __version__
-from .explore import normalize
+from .explore import normalize, shape
 
 LOCKING_READ = re.compile(r"\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|SHARE|KEY\s+SHARE)\b", re.I)
 
@@ -35,7 +35,7 @@ def render(scenario, result):
         items = "".join(f"<li>{esc(w)}</li>" for w in result.warnings)
         parts.append(f'<section class="warn"><h2>Warnings</h2><ul>{items}</ul></section>')
     parts += [
-        race_section(p, result.ignored, mirrored=(p.b.name, p.a.name) in keys and p.a is not p.b, first=i == 0)
+        race_section(p, result.fks, mirrored=(p.b.name, p.a.name) in keys and p.a is not p.b, first=i == 0)
         for i, p in enumerate(shown)
     ]
     if calm:
@@ -55,7 +55,7 @@ def names(pair):
     return a, (f"{b} again" if pair.a is pair.b else b)
 
 
-def race_section(pair, ignored, mirrored, first):
+def race_section(pair, fks, mirrored, first):
     race = pair.races[0]
     a, b = names(pair)
     sql, _ = race.hold
@@ -70,7 +70,7 @@ def race_section(pair, ignored, mirrored, first):
         "<h3>Responses</h3>",
         responses(pair, race, a, b),
     ]
-    data = data_diff(pair, race, ignored, a, b)
+    data = data_diff(pair, race, fks, a, b)
     if data:
         out += ["<h3>Final data</h3>", data]
     steps = timeline(race.outcome.events, race.hold[0], a, b)
@@ -92,9 +92,10 @@ def responses(pair, schedule, a, b):
     return f'<table class="grid"><tr><th></th><th>{esc(a)}</th><th>{esc(b)}</th></tr>{body}</table>'
 
 
-def data_diff(pair, schedule, ignored, a, b):
-    forced = normalize(schedule.outcome.snapshot, ignored)
-    serial = [normalize(s.snapshot, ignored) for s in pair.serials]
+def data_diff(pair, schedule, fks, a, b):
+    ignored = pair.ignored
+    forced = normalize(schedule.outcome.snapshot, ignored, fks)
+    serial = [normalize(s.snapshot, ignored, fks) for s in pair.serials]
     out = []
     for table, rows in forced.items():
         if all(rows == s[table] for s in serial):
@@ -135,7 +136,7 @@ def timeline(events, held, a, b):
             row["results"].append(e)
         if e.kind != "hold":
             open_rows[e.conn] = row
-        row["released"] = waiting and e.kind == "sql" and e.who == "A" and e.text == held
+        row["released"] = waiting and e.kind == "sql" and e.who == "A" and shape(e.text) == held
         waiting = (waiting or e.kind == "hold") and not row["released"]
         rows.append(row)
     body = []
