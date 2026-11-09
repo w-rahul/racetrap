@@ -1,0 +1,55 @@
+name: docker
+
+on:
+  push:
+  pull_request:
+  release:
+    types: [published]
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-retries 30
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker build -t racetrap .
+      - run: docker run --rm racetrap --version
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync
+      - name: Run the image against an app started by hand
+        # the container cannot start the app, so the scenario has no command:
+        # racetrap opens the proxy, then the app starts and connects through it
+        run: |
+          grep -v '^command' examples/tickets/fixed.toml > fixed-by-hand.toml
+          docker run --rm --network host -v "$PWD:/work" -e DATABASE_URL racetrap fixed-by-hand.toml &
+          racetrap=$!
+          timeout 30 bash -c 'until (exec 3<>/dev/tcp/127.0.0.1/6499) 2>/dev/null; do sleep 0.2; done'
+          cd examples/tickets
+          DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:6499/postgres uv run python -m uvicorn app:app --port 8765 --log-level warning &
+          wait $racetrap
+      - name: Push the image to ghcr.io
+        if: github.event_name == 'release'
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          echo "$TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
+          docker tag racetrap "ghcr.io/w-rahul/racetrap:${TAG#v}"
+          docker tag racetrap ghcr.io/w-rahul/racetrap:latest
+          docker push --all-tags ghcr.io/w-rahul/racetrap
