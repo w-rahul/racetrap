@@ -79,3 +79,9 @@ def test_rejects_bad_length(length):
 def test_rejects_unterminated_string():
     with pytest.raises(wire.ProtocolError):
         feed(wire.Session(), msg(b"Q", b"SELECT 1"))
+
+
+def test_rejects_oversized_startup_packet():
+    # the first bytes of a TLS ClientHello read as a length of about 369 MB
+    with pytest.raises(wire.ProtocolError):
+        read(wire.read_startup, bytes.fromhex("16030101") + b"\0" * 8)

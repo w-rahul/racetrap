@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+import http.client
 import os
 import shlex
 import shutil
@@ -80,10 +81,16 @@ async def run(scenario, progress=None):
         rec = Recorder()
         proxy = Proxy(scenario.proxy, scenario.upstream, rec)
         await proxy.start()
-        app = start_app(scenario) if scenario.command else None
+        app = None
         try:
+            if scenario.command:
+                # an old app left on the port would be tested instead of this one
+                if await asyncio.to_thread(ping, scenario.app):
+                    raise RunError(f"something already answers at {scenario.app}. Stop it first, deadheat starts the app itself")
+                app = start_app(scenario)
             await wait_ready(scenario.app, app)
-            return await Explorer(scenario, db, rec, progress).run()
+            alive = (lambda: app[0].poll() is None) if app else None
+            return await Explorer(scenario, db, rec, progress, alive).run()
         finally:
             if app:
                 stop_app(app)
@@ -128,24 +135,28 @@ def stop_app(app):
 
 
 async def wait_ready(url, app, timeout=30):
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         if app and app[0].poll() is not None:
             raise RunError(f"app exited with code {app[0].returncode}\n{tail(app[1])}")
-        try:
-            await asyncio.to_thread(ping, opener, url)
+        if await asyncio.to_thread(ping, url):
             return
-        except OSError:
-            await asyncio.sleep(0.2)
+        await asyncio.sleep(0.2)
     raise RunError(f"app at {url} did not answer within {timeout}s\n{tail(app[1]) if app else ''}")
 
 
-def ping(opener, url):
+_opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+
+
+def ping(url):
+    """True if anything answers HTTP at url, even with an error status."""
     try:
-        opener.open(url, timeout=1).close()
+        _opener.open(url, timeout=1).close()
     except urllib.error.HTTPError:
-        pass  # any HTTP answer means the app is up
+        return True
+    except (OSError, http.client.HTTPException):
+        return False
+    return True
 
 
 def tail(log, lines=20):

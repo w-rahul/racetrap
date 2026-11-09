@@ -31,6 +31,7 @@ class Scenario:
     init: list = field(default_factory=list)
     invariants: list = field(default_factory=list)
     ignore: set = field(default_factory=set)
+    refs: dict = field(default_factory=dict)
     proxy: tuple = ("127.0.0.1", 6499)
     command: str | None = None
     database_env: str = "DATABASE_URL"
@@ -74,29 +75,49 @@ def load(path):
     if not host or not port.isdigit():
         raise ScenarioError(f"{path.name}: proxy must look like 127.0.0.1:6499")
 
-    ignore = set()
-    for item in get("ignore", list, []):
-        table, dot, column = str(item).partition(".")
-        if not dot or not table or not column:
-            raise ScenarioError(f"{path.name}: ignore entries look like table.column, got {item!r}")
-        ignore.add((table, column))
+    column = _column_parser(path.name)
+    ignore = {column(item, "ignore") for item in get("ignore", list, [])}
+    refs = {column(k, "refs"): column(v, "refs") for k, v in get("refs", dict, {}).items()}
+
+    app = _expand(get("app", str)).rstrip("/")
+    if not app.startswith(("http://", "https://")):
+        raise ScenarioError(f"{path.name}: app must start with http:// or https://")
+    database = _expand(get("database", str))
+    try:
+        urlsplit(database).port
+    except ValueError:
+        raise ScenarioError(f"{path.name}: database URL has an invalid port") from None
+    stall = get("stall_ms", int, 1000)
+    if stall <= 0:
+        raise ScenarioError(f"{path.name}: stall_ms must be above 0")
 
     command = get("command", str, None)
     return Scenario(
         path=path,
-        app=_expand(get("app", str)).rstrip("/"),
-        database=_expand(get("database", str)),
+        app=app,
+        database=database,
         requests=requests,
         setup=_sql_list(get("setup", list), "setup", path.name),
         init=_sql_list(get("init", list, []), "init", path.name),
         invariants=_sql_list(get("invariants", list, []), "invariants", path.name),
         ignore=ignore,
+        refs=refs,
         proxy=(host, int(port)),
         command=_expand(command) if command else None,
         database_env=get("database_env", str, "DATABASE_URL"),
         schema=get("schema", str, "public"),
-        stall=get("stall_ms", int, 1000) / 1000,
+        stall=stall / 1000,
     )
+
+
+def _column_parser(where):
+    def column(item, key):
+        table, dot, name = str(item).partition(".")
+        if not dot or not table or not name:
+            raise ScenarioError(f"{where}: {key} entries look like table.column, got {item!r}")
+        return table, name
+
+    return column
 
 
 _REQUIRED = object()

@@ -13,14 +13,18 @@ CANCEL_REQUEST = 80877102
 # Postgres itself refuses messages over 1 GB, so a bigger length is garbage.
 MAX_LENGTH = 1 << 30
 
+# Postgres caps startup packets at 10000 bytes. A client that opens with a TLS
+# ClientHello sends bytes that read as a huge length and would wait forever.
+MAX_STARTUP = 10000
+
 
 class ProtocolError(Exception):
     pass
 
 
-def _length(raw):
+def _length(raw, limit=MAX_LENGTH):
     (n,) = struct.unpack("!I", raw)
-    if not 4 <= n <= MAX_LENGTH:
+    if not 4 <= n <= limit:
         raise ProtocolError(f"bad message length {n}")
     return n
 
@@ -28,7 +32,7 @@ def _length(raw):
 async def read_startup(reader):
     """Read one untyped startup packet. Returns its request code and raw bytes."""
     head = await reader.readexactly(4)
-    body = await reader.readexactly(_length(head) - 4)
+    body = await reader.readexactly(_length(head, MAX_STARTUP) - 4)
     if len(body) < 4:
         raise ProtocolError("startup packet too short")
     return struct.unpack("!I", body[:4])[0], head + body
