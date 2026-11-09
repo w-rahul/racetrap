@@ -20,7 +20,7 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 
 - Holds that only repeat a one at a time run are left out. The ticket example now takes 3 orders for each pair, down from 5.
 - `setup` strings may hold several statements.
-- A simpler, sharper logo, and a new demo in the README.
+- A simpler, sharper logo, and a new, sharper demo in the README.
 - CI covers Postgres 14 to 18, Python 3.11 to 3.14, and Linux, Windows and macOS.
 - The proxy is tested with psycopg2, next to asyncpg and psycopg 3.
 - ruff checks the code in CI, and the test run reports coverage.

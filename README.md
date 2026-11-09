@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/demo.gif" width="100%" alt="racetrap catching a double booking, then passing once the fix is in">
+  <img src="https://raw.githubusercontent.com/w-rahul/racetrap/main/docs/demo.webp" width="100%" alt="racetrap catching a double booking, then passing once the fix is in">
 </p>
 
 ## Why it exists
