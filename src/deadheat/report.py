@@ -188,7 +188,7 @@ def fix(pair, schedule, a, b):
     return lead + (
         "<ol class=\"fixes\">"
         "<li>Lock what you read: add <code>FOR UPDATE</code> to that <code>SELECT</code>.</li>"
-        "<li>Or check and write in one statement, like <code>UPDATE ... WHERE stock &gt; 0 RETURNING ...</code>, "
+        "<li>Or check and write in one statement, like <code>UPDATE ... WHERE stock > 0 RETURNING ...</code>, "
         "and treat zero rows as a conflict.</li>"
         "<li>Or run the transaction at <code>SERIALIZABLE</code> and retry on error 40001.</li>"
         "</ol><p class=\"after\">Run deadheat again after the fix. It passes when every order is serializable.</p>"
