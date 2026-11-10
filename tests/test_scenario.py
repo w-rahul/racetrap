@@ -74,6 +74,16 @@ def test_loads_logins_and_checks_what_requests_use(tmp_path, monkeypatch):
         load(write(tmp_path, GOOD + LOGIN.replace('capture = { token = "access_token" }', '')))
 
 
+def test_a_request_body_can_be_a_form(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_DB", "postgresql://localhost/shop")
+    form = 'form = { username = "alice", password = "secret", scope = 1 }'
+    request = load(write(tmp_path, GOOD + LOGIN.replace('json = { user = "alice" }', form))).logins[0].request
+    assert (request.method, request.json) == ("POST", None)
+    assert request.form == {"username": "alice", "password": "secret", "scope": "1"}
+    with pytest.raises(ScenarioError, match="both json and form"):
+        load(write(tmp_path, GOOD + LOGIN.replace('json = { user = "alice" }', 'json = { user = "alice" }\n' + form)))
+
+
 def test_bad_database_port_is_an_error(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_DB", "postgresql://localhost:99999/shop")
     with pytest.raises(ScenarioError, match="invalid port"):

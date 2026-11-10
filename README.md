@@ -139,7 +139,7 @@ json = { user = "bob" }
 | --- | --- |
 | `app` | Base URL of the app. |
 | `database` | The real Postgres. racetrap also connects to it directly, to save, restore and compare the tables. |
-| `[[request]]` | `name`, `path`, and optional `method`, `json` and `headers`. |
+| `[[request]]` | `name`, `path`, and optional `method`, `headers`, and a body as `json` or `form`. |
 | `command` | Optional. Starts the app with `DATABASE_URL` pointing at the proxy. |
 | `init` | Optional SQL run once before the app starts. |
 | `setup` | Optional SQL run before every order. With it, racetrap resets the data your way and does not save or restore tables. |

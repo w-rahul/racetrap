@@ -28,6 +28,7 @@ class Request:
     path: str
     json: Any = None
     headers: dict[str, str] = field(default_factory=dict)
+    form: dict[str, str] | None = None
 
 
 @dataclass
@@ -105,7 +106,7 @@ def load(path: str | Path) -> Scenario:
         logins.append(Login(request.name, request, capture))
     known = {f"{login.name}.{var}" for login in logins for var in login.capture}
     for r in requests:
-        for name, var in REF.findall(json.dumps([r.path, r.headers, r.json])):
+        for name, var in REF.findall(json.dumps([r.path, r.headers, r.json, r.form])):
             if f"{name}.{var}" not in known:
                 raise ScenarioError(f"{path.name}: {r.name} uses ${{{name}.{var}}}, but no login captures it")
 
@@ -183,12 +184,16 @@ def _request(raw: Any, i: int, where: str) -> Request:
     path = get("path", str)
     if not path.startswith("/") or any(c.isspace() for c in path):
         raise ScenarioError(f"{where}: request path {path!r} must start with / and have no spaces")
+    form = get("form", dict, None)
+    if form is not None and "json" in raw:
+        raise ScenarioError(f"{where}: request {i + 1} has both json and form. Keep one")
     return Request(
         name=get("name", str),
-        method=get("method", str, "POST" if "json" in raw else "GET").upper(),
+        method=get("method", str, "POST" if "json" in raw or form is not None else "GET").upper(),
         path=path,
         json=raw.get("json"),
         headers={str(k): str(v) for k, v in get("headers", dict, {}).items()},
+        form=None if form is None else {str(k): str(v) for k, v in form.items()},
     )
 
 

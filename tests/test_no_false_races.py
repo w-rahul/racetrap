@@ -93,11 +93,17 @@ headers = { authorization = "Bearer ${USER.token}", cookie = "${USER.cookie}" }
 """
 
 
+FORM_LOGIN = 'path = "/login-form"\nform = { username = "USER", password = "a b&c" }'
+
+
 @needs_db
-def test_requests_use_what_a_login_captured(tmp_path, monkeypatch):
+@pytest.mark.parametrize("login", ['path = "/login"\njson = { user = "USER" }', FORM_LOGIN])
+def test_requests_use_what_a_login_captured(tmp_path, monkeypatch, login):
     monkeypatch.setenv("DATABASE_URL", DSN)
     head = SCENARIO.split("[[request]]")[0].replace("APP_DIR", str(Path(__file__).parent))
-    text = head + LOGGED_IN.replace("USER", "alice") + LOGGED_IN.replace("USER", "bob")
+    logged_in = LOGGED_IN.replace('path = "/login"\njson = { user = "USER" }', login)
+    assert login in logged_in
+    text = head + logged_in.replace("USER", "alice") + logged_in.replace("USER", "bob")
     (tmp_path / "shop.toml").write_text(text, encoding="utf-8")
     result = run_async(asyncio.wait_for(run(load(tmp_path / "shop.toml")), 120))
     # without the token and the cookie every request would answer 401

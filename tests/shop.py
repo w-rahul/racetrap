@@ -3,6 +3,7 @@
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from urllib.parse import parse_qs
 
 import asyncpg
 from fastapi import BackgroundTasks, FastAPI, Request, Response
@@ -86,6 +87,16 @@ async def login(body: User, response: Response):
     """Hands out a token in the body and a session in a cookie."""
     response.set_cookie("session", f"cookie-{body.user}")
     return {"access_token": f"token-{body.user}"}
+
+
+@app.post("/login-form")
+async def login_form(request: Request, response: Response):
+    """The same login, sent as a form the way OAuth2 password logins are."""
+    if request.headers.get("content-type") != "application/x-www-form-urlencoded":
+        return JSONResponse({"detail": "send a form"}, status_code=415)
+    user = parse_qs((await request.body()).decode())["username"][0]
+    response.set_cookie("session", f"cookie-{user}")
+    return {"access_token": f"token-{user}"}
 
 
 @app.post("/account/take")

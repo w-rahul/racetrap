@@ -18,6 +18,7 @@ import json
 import re
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Callable, Collection, Sequence
@@ -314,7 +315,7 @@ class Explorer:
             for var, source in login.capture.items():
                 values[f"{login.name}.{var}"] = captured(source, body, headers, login.name)
         for r in self.s.requests:
-            r.path, r.headers, r.json = fill(r.path, values), fill(r.headers, values), fill(r.json, values)
+            r.path, r.headers, r.json, r.form = (fill(part, values) for part in (r.path, r.headers, r.json, r.form))
         if self.s.logins:
             await self.rec.quiet()
 
@@ -547,8 +548,12 @@ class Explorer:
         return status, body.decode("utf-8", "replace") if self.s.bodies else None
 
     def _http(self, req: Request) -> tuple[int, bytes, http.client.HTTPMessage | None]:
-        data = None if req.json is None else json.dumps(req.json).encode()
-        headers = {"content-type": "application/json", **req.headers} if data else req.headers
+        data: bytes | None
+        if req.form is not None:
+            data, kind = urllib.parse.urlencode(req.form).encode(), "application/x-www-form-urlencoded"
+        else:
+            data, kind = (None if req.json is None else json.dumps(req.json).encode()), "application/json"
+        headers = {"content-type": kind, **req.headers} if data else req.headers
         r = urllib.request.Request(self.s.app + req.path, data=data, method=req.method, headers=headers)
         try:
             try:

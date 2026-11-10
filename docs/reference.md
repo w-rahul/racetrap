@@ -57,8 +57,9 @@ headers = { authorization = "Bearer bob-token" }
 | --- | --- | --- | --- |
 | `name` | yes | | A unique label, used in the output and the report. |
 | `path` | yes | | Path and query string, starting with `/`. |
-| `method` | no | `POST` with `json`, else `GET` | The HTTP method. |
+| `method` | no | `POST` with `json` or `form`, else `GET` | The HTTP method. |
 | `json` | no | | The request body, sent as JSON. |
+| `form` | no | | The request body, sent as a form: `form = { username = "alice", password = "secret" }`. Use it or `json`, not both. |
 | `headers` | no | `{}` | Extra headers, such as `authorization`. Give each request its own user to race two users. |
 
 racetrap pairs every request with every other one, in both roles, and with itself, which catches double submits. See [What is skipped](#what-is-skipped) for the pairs it leaves out.
@@ -81,9 +82,10 @@ json = { quantity = 1 }
 headers = { authorization = "Bearer ${alice.token}", cookie = "${alice.cookie}" }
 ```
 
+- A login that expects a form, like an OAuth2 password login, takes `form` in place of `json`: `form = { username = "alice@example.com", password = "secret" }`.
 - A capture is a path into the JSON body, with dots between keys and list positions, like `data.tokens.0.value`.
 - `header:` reads a response header instead. For `set-cookie` it keeps only the `name=value` part of each cookie, ready to send back in a `cookie` header.
-- A request uses a captured value as `${login.name}` in its path, headers or JSON body. A name no login captures is an error when the scenario loads.
+- A request uses a captured value as `${login.name}` in its path, headers, JSON body or form. A name no login captures is an error when the scenario loads.
 - Logins run before racetrap saves the tables, so the sessions they create are part of the data every order starts from.
 - A login that does not answer with a 2xx status stops the run.
 

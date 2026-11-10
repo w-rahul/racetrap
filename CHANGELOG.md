@@ -2,6 +2,12 @@
 
 Notable changes to racetrap. Versions follow [semantic versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- `form` sends a request body as a form. Logins that follow the OAuth2 password flow need it.
+
 ## 0.5.0 (2026-11-10)
 
 ### Added
