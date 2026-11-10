@@ -196,7 +196,7 @@ racetrap.toml::alice buys vs bob buys FAILED
 
 ```json
 {
-  "racetrap": "0.5.0",
+  "racetrap": "0.6.0",
   "scenario": "buggy.toml",
   "app": "http://127.0.0.1:8765",
   "runs": 38,
@@ -239,7 +239,7 @@ racetrap.toml::alice buys vs bob buys FAILED
 ## GitHub Action
 
 ```yaml
-- uses: w-rahul/racetrap@v0.5.0
+- uses: w-rahul/racetrap@v0.6.0
   with:
     scenario: racetrap.toml
 ```
@@ -250,7 +250,7 @@ racetrap.toml::alice buys vs bob buys FAILED
 | `report` | `racetrap-report.html` | Where to write the HTML report. |
 | `upload-report` | `true` | Upload the report as a workflow artifact. |
 | `artifact-name` | `racetrap-report` | Name of that artifact. Change it when a job runs the action twice. |
-| `package` | `racetrap` | What to install, like `racetrap==0.5.0`. |
+| `package` | `racetrap` | What to install, like `racetrap==0.6.0`. |
 | `args` | | Extra command line options, like `--workers 4` or `--junit results.xml`. |
 
 The job needs a Postgres it can reach and your app's own dependencies installed, so `command` can start the app. The step fails when any pair races.

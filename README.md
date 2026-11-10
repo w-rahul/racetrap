@@ -45,7 +45,7 @@ There is nothing to reset by hand. racetrap saves your tables before it starts, 
 
 ```
 $ racetrap examples/tickets/buggy.toml
-racetrap 0.5.0
+racetrap 0.6.0
 proxy  127.0.0.1:6499 -> localhost:5432
 app    http://127.0.0.1:8765
 
@@ -186,7 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: pip install -r requirements.txt
-      - uses: w-rahul/racetrap@v0.5.0
+      - uses: w-rahul/racetrap@v0.6.0
         with:
           scenario: racetrap.toml
 ```

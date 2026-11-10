@@ -2,7 +2,7 @@
 
 Notable changes to racetrap. Versions follow [semantic versioning](https://semver.org).
 
-## Unreleased
+## 0.6.0 (2026-11-10)
 
 ### Added
 
@@ -11,6 +11,8 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 
 ### Fixed
 
+- An empty statement, which some connection pools send as a ping, no longer counts as the start of a request's work. That removes orders that only repeat a one at a time run, and the report labels it PING.
+- Long request names in the report end in an ellipsis and show in full on hover.
 - A race that ends in a unique violation gets advice that fits it: handle the error or insert with `ON CONFLICT`. The report used to suggest locking a row that does not exist yet.
 
 ## 0.5.0 (2026-11-10)

@@ -182,8 +182,8 @@ def lanes(events: list[Event], held: str, a: str, b: str) -> str:
                 step["released"] = True
         steps.append(step)
     cells = [
-        f'<div class="lane-name" style="grid-row:1"><b>A</b>{esc(a)}</div>',
-        f'<div class="lane-name" style="grid-row:2"><b>B</b>{esc(b)}</div>',
+        f'<div class="lane-name" style="grid-row:1" title="{esc(a)}"><b>A</b><span>{esc(a)}</span></div>',
+        f'<div class="lane-name" style="grid-row:2" title="{esc(b)}"><b>B</b><span>{esc(b)}</span></div>',
         '<div class="track" style="grid-row:1"></div><div class="track" style="grid-row:2"></div>',
     ]
     if gate is not None:
@@ -195,10 +195,12 @@ def lanes(events: list[Event], held: str, a: str, b: str) -> str:
             cells.append(f'<div class="gate" style="grid-column:{i + 2}"><span>held</span></div>')
             continue
         match = VERB.match(s["text"])
-        verb = "RESET" if POOL_RESET.search(s["text"]) else (match[1].upper() if match else "SQL")
+        ping = not s["text"].strip("; \t\r\n")
+        verb = "PING" if ping else "RESET" if POOL_RESET.search(s["text"]) else (match[1].upper() if match else "SQL")
+        quiet = verb in ("PING", "RESET")
         errors = [e.text[:5] for e in s["results"] if e.kind == "error"]
-        res = f"error {errors[0]}" if errors else "" if verb == "RESET" else rows_label(s["results"])
-        cls = "step" + (" released" if s.get("released") else "") + (" err" if errors else "") + (" quiet" if verb == "RESET" else "")
+        res = f"error {errors[0]}" if errors else "" if quiet else rows_label(s["results"])
+        cls = "step" + (" released" if s.get("released") else "") + (" err" if errors else "") + (" quiet" if quiet else "")
         mark = '<i>released</i>' if s.get("released") else ""
         cells.append(
             f'<div class="{cls}" style="grid-row:{row};grid-column:{i + 2}" title="{esc(s["text"])}">'
@@ -469,6 +471,7 @@ h1.bad { color: var(--red); }
 .lanes-wrap { overflow-x: auto; margin: 0 -28px; padding: 16px 28px 10px; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); background: var(--bg); }
 .lanes { display: grid; grid-template-rows: 74px 74px; align-items: center; column-gap: 6px; position: relative; min-width: max-content; }
 .lane-name { grid-column: 1; font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; padding-right: 10px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.lane-name span { overflow: hidden; text-overflow: ellipsis; }
 .lane-name b { width: 22px; height: 22px; border-radius: 6px; background: var(--ink); color: var(--bg); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; flex: none; }
 .track { grid-column: 2 / -1; height: 2px; background: var(--line); align-self: center; }
 .step { position: relative; z-index: 1; justify-self: start; background: var(--raise); border: 1px solid var(--line); border-radius: 9px; padding: 6px 9px 5px; min-width: 60px; }

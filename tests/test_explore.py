@@ -21,7 +21,7 @@ from racetrap.explore import (
     shape,
     unstable,
 )
-from racetrap.report import fix
+from racetrap.report import fix, lanes
 from racetrap.scenario import Request
 
 IGNORED = {("bookings", "id")}
@@ -68,6 +68,13 @@ def test_holds_leave_out_orders_that_are_serial_anyway():
     trace = ["BEGIN;", "SELECT n", "UPDATE t", "SELECT n", "COMMIT;", reset]
     # before the first SELECT A has only opened a transaction, and after COMMIT it is done
     assert holds(trace) == [("UPDATE t", 1), ("SELECT n", 2), ("COMMIT;", 1)]
+
+
+def test_a_pool_ping_does_not_count_as_work():
+    """SQLAlchemy checks a pooled connection with an empty statement before every request."""
+    assert holds([";", "BEGIN", "SELECT n", "UPDATE t", "COMMIT"]) == [("UPDATE t", 1), ("COMMIT", 1)]
+    step = lanes([Event(0.0, "A", 1, "sql", ";"), Event(0.1, "A", 1, "ok", "")], "UPDATE t", "a long request name", "b")
+    assert '<span class="verb">PING</span>' in step and 'title="a long request name"' in step
 
 
 def test_holds_keep_every_gap_between_statements_that_commit_on_their_own():

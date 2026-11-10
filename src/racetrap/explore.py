@@ -90,7 +90,8 @@ WHERE c.contype = 'f'
 """
 
 # A statement that reads nothing, writes nothing and ends no transaction.
-CONTROL = re.compile(r"^\s*(?:BEGIN|START\s+TRANSACTION|SET|SHOW|RESET)\b[^;]*;?\s*$", re.I)
+# An empty statement counts too. Some connection pools send one as a ping.
+CONTROL = re.compile(r"^\s*(?:(?:BEGIN|START\s+TRANSACTION|SET|SHOW|RESET)\b[^;]*)?;?\s*$", re.I)
 # What connection pools send when a connection goes back.
 POOL_RESET = re.compile(r"pg_advisory_unlock_all|DISCARD ALL|RESET ALL", re.I)
 # Words that mean a statement touches some relation, named or not.

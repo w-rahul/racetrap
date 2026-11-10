@@ -13,7 +13,7 @@ inputs:
     description: Where to write the HTML report.
     default: racetrap-report.html
   package:
-    description: What to install, like racetrap or racetrap==0.5.0.
+    description: What to install, like racetrap or racetrap==0.6.0.
     default: racetrap
   args:
     description: Extra command line options, like --workers 4 or --junit results.xml.
