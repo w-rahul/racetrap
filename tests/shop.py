@@ -5,7 +5,7 @@ import os
 from contextlib import asynccontextmanager
 
 import asyncpg
-from fastapi import BackgroundTasks, FastAPI
+from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -79,3 +79,22 @@ async def take(body: User):
         n = await conn.fetchval("SELECT n FROM counters WHERE id = 1")
         await conn.execute("UPDATE counters SET n = $1 WHERE id = 1", n + 1)
     return {}
+
+
+@app.post("/login")
+async def login(body: User, response: Response):
+    """Hands out a token in the body and a session in a cookie."""
+    response.set_cookie("session", f"cookie-{body.user}")
+    return {"access_token": f"token-{body.user}"}
+
+
+@app.post("/account/take")
+async def account_take(request: Request):
+    """The same safe counter as /take, for a logged in user only."""
+    who = request.headers.get("authorization", "").removeprefix("Bearer token-")
+    if who not in ("alice", "bob") or request.cookies.get("session") != f"cookie-{who}":
+        return JSONResponse({"detail": "log in first"}, status_code=401)
+    async with lock, app.state.pool.acquire() as conn:
+        n = await conn.fetchval("SELECT n FROM counters WHERE id = 1")
+        await conn.execute("UPDATE counters SET n = $1 WHERE id = 1", n + 1)
+    return {"taken_by": who}

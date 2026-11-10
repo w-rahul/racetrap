@@ -1,6 +1,7 @@
 """One self contained HTML report: for each race, the order, the outcome and the fix."""
 
 import html
+import json
 import re
 from datetime import datetime
 
@@ -120,6 +121,7 @@ def race_card(pair, fks, mirrored):
         f'<div><h3>Fix it in your code</h3>{fix(pair, race, a, b)}</div>',
         "</div>",
         f"<details><summary>Rows in each order</summary>{rows}</details>" if rows else "",
+        bodies(pair, race),
         f"<details><summary>Every statement, in order</summary>{timeline(race.outcome.events, sql, a, b)}</details>",
         "</section>",
     ])
@@ -207,6 +209,29 @@ def outcome(pair, race, fks):
         + "".join(body)
         + "</table>"
     )
+
+
+def bodies(pair, race):
+    """What each request answered in each order, side by side."""
+    orders = [("A then B", pair.serials[0], ""), ("B then A", pair.serials[1], ""), ("racetrap's order", race.outcome, " bad")]
+    if not any(o.bodies.get(role) for _, o, _ in orders for role in "AB"):
+        return ""
+    out = []
+    for role in "AB":
+        cells = "".join(f'<div class="state{cls}"><h4>{label}</h4><pre>{esc(pretty(o.bodies.get(role)))}</pre></div>' for label, o, cls in orders)
+        out.append(f'<p class="table-name">{role}</p><div class="states">{cells}</div>')
+    return "<details><summary>Response bodies in each order</summary>" + "".join(out) + "</details>"
+
+
+def pretty(body, limit=600):
+    """A body laid out for reading, cut to a sane length."""
+    if not body:
+        return ""
+    try:
+        body = json.dumps(json.loads(body), indent=2)
+    except ValueError:
+        pass
+    return body if len(body) <= limit else body[:limit] + "\n…"
 
 
 def data_diff(pair, schedule, fks, a, b):
@@ -429,6 +454,7 @@ summary:hover { color: var(--ink); }
 .state { border: 1px solid var(--line); border-radius: 10px; padding: 10px; overflow-x: auto; }
 .state.bad { border-color: var(--red-line); background: var(--red-soft); }
 .state h4 { font-size: 12px; margin: 0 0 6px; font-weight: 600; color: var(--muted); }
+.state pre { margin: 0; font: 12px/1.5 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
 .state.bad h4 { color: var(--red); }
 .rows th, .rows td { text-align: left; padding: 4px 6px; font-size: 12.5px; border-bottom: 1px solid var(--line); }
 .rows th { font-weight: 500; color: var(--muted); }

@@ -2,6 +2,14 @@
 
 Notable changes to racetrap. Versions follow [semantic versioning](https://semver.org).
 
+## 0.4.0 (2026-11-10)
+
+### Added
+
+- Response bodies are compared, not only status codes, so an API that answers 200 for everything is still checked. Fields named like ids, tokens and timestamps are left out, and so is any field that changes between two identical runs. `bodies = false` turns it off.
+- `[[login]]` sends a request once before the run and captures a JSON field or a response header, for requests to use as `${login.name}`.
+- The report shows the response bodies of each order.
+
 ## 0.3.0 (2026-11-09)
 
 ### Added

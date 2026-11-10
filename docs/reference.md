@@ -35,6 +35,7 @@ headers = { authorization = "Bearer bob-token" }
 | `app` | yes | | Base URL of the app. Starts with `http://` or `https://`. |
 | `database` | yes | | URL of the real Postgres. The proxy forwards to it, and racetrap connects to it directly to save, restore and compare the tables. |
 | `[[request]]` | yes | | The requests to race. At least one. See below. |
+| `[[login]]` | no | | Requests sent once before the run, to log users in. See [Logging in](#logging-in). |
 | `command` | no | | Command that starts the app. racetrap runs it in the scenario file's folder, with the database URL pointing at the proxy, and stops it at the end. |
 | `database_env` | no | `DATABASE_URL` | The environment variable `command` receives the proxy URL in. |
 | `init` | no | `[]` | List of SQL statements run once, before the app starts. Good for creating tables and seed rows. |
@@ -42,6 +43,7 @@ headers = { authorization = "Bearer bob-token" }
 | `invariants` | no | `[]` | List of SQL queries that must return true after every order, like `SELECT count(*) <= 1 FROM orders`. A failure is reported as a race, unless it also fails in both one at a time runs. |
 | `ignore` | no | `[]` | List of `table.column` entries to leave out of the comparison. |
 | `refs` | no | `{}` | Id references that have no foreign key, like `{ "orders.user_id" = "users.id" }`. racetrap compares such a column by the row it points to. |
+| `bodies` | no | `true` | Compare response bodies as well as status codes. Fields named like ids, tokens and timestamps are left out, and so is any field that changes between two identical runs. |
 | `proxy` | no | `127.0.0.1:6499` | Address the proxy listens on. |
 | `schema` | no | `public` | The Postgres schema whose tables are compared. |
 | `stall_ms` | no | `1000` | How long the second request may send nothing before racetrap releases the first. This is how a lock outside Postgres ends a wait. |
@@ -59,6 +61,30 @@ headers = { authorization = "Bearer bob-token" }
 | `headers` | no | `{}` | Extra headers, such as `authorization`. Give each request its own user to race two users. |
 
 racetrap pairs every request with every other one, in both roles, and with itself, which catches double submits. See [What is skipped](#what-is-skipped) for the pairs it leaves out.
+
+### Logging in
+
+A `[[login]]` is a request racetrap sends once, before the first order. It takes the same keys as a request, plus `capture`, which names the values to keep from the response.
+
+```toml
+[[login]]
+name = "alice"
+path = "/login"
+json = { email = "alice@example.com", password = "secret" }
+capture = { token = "data.access_token", cookie = "header:set-cookie" }
+
+[[request]]
+name = "alice buys"
+path = "/items/1/buy"
+json = { quantity = 1 }
+headers = { authorization = "Bearer ${alice.token}", cookie = "${alice.cookie}" }
+```
+
+- A capture is a path into the JSON body, with dots between keys and list positions, like `data.tokens.0.value`.
+- `header:` reads a response header instead. For `set-cookie` it keeps only the `name=value` part of each cookie, ready to send back in a `cookie` header.
+- A request uses a captured value as `${login.name}` in its path, headers or JSON body. A name no login captures is an error when the scenario loads.
+- Logins run before racetrap saves the tables, so the sessions they create are part of the data every order starts from.
+- A login that does not answer with a 2xx status stops the run.
 
 ### How the data is reset
 
@@ -122,7 +148,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 
 ```json
 {
-  "racetrap": "0.3.0",
+  "racetrap": "0.4.0",
   "scenario": "buggy.toml",
   "app": "http://127.0.0.1:8765",
   "runs": 38,
@@ -165,7 +191,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 ## GitHub Action
 
 ```yaml
-- uses: w-rahul/racetrap@v0.3.0
+- uses: w-rahul/racetrap@v0.4.0
   with:
     scenario: racetrap.toml
 ```
@@ -176,7 +202,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | `report` | `racetrap-report.html` | Where to write the HTML report. |
 | `upload-report` | `true` | Upload the report as a workflow artifact. |
 | `artifact-name` | `racetrap-report` | Name of that artifact. Change it when a job runs the action twice. |
-| `package` | `racetrap` | What to install, like `racetrap==0.3.0`. |
+| `package` | `racetrap` | What to install, like `racetrap==0.4.0`. |
 
 The job needs a Postgres it can reach and your app's own dependencies installed, so `command` can start the app. The step fails when any pair races.
 

@@ -53,6 +53,27 @@ def test_rejects_bad_scenarios(tmp_path, monkeypatch, old, new, error):
         load(write(tmp_path, GOOD.replace(old, new)))
 
 
+LOGIN = """
+[[login]]
+name = "alice"
+path = "/login"
+json = { user = "alice" }
+capture = { token = "access_token" }
+"""
+
+
+def test_loads_logins_and_checks_what_requests_use(tmp_path, monkeypatch):
+    monkeypatch.setenv("TEST_DB", "postgresql://localhost/shop")
+    uses = GOOD.replace('json = { item = 1 }', 'json = { item = 1 }\nheaders = { authorization = "Bearer ${alice.token}" }')
+    s = load(write(tmp_path, uses + LOGIN))
+    assert (s.logins[0].name, s.logins[0].request.path, s.logins[0].capture) == ("alice", "/login", {"token": "access_token"})
+    assert s.bodies is True
+    with pytest.raises(ScenarioError, match="no login captures it"):
+        load(write(tmp_path, uses))
+    with pytest.raises(ScenarioError, match="needs capture"):
+        load(write(tmp_path, GOOD + LOGIN.replace('capture = { token = "access_token" }', '')))
+
+
 def test_bad_database_port_is_an_error(tmp_path, monkeypatch):
     monkeypatch.setenv("TEST_DB", "postgresql://localhost:99999/shop")
     with pytest.raises(ScenarioError, match="invalid port"):

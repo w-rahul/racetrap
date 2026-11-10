@@ -25,6 +25,7 @@ import psycopg
 from psycopg import sql as pgsql
 
 from .proxy import Hooks
+from .scenario import REF
 
 COLUMNS = """
 SELECT c.table_name, c.column_name, coalesce(c.column_default, ''), c.is_identity
@@ -94,6 +95,10 @@ WRITE = re.compile(r"\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|COPY)\b", re.I)
 # Writes that foreign keys can carry on into child tables.
 CASCADES = re.compile(r"\b(?:UPDATE|DELETE|MERGE|TRUNCATE)\b", re.I)
 
+# Response fields that carry values made up on the spot: ids, tokens and timestamps.
+GENERATED_KEY = re.compile(r"(?:^|_)(?:id|uuid|token|at|timestamp)$|(?:Id|At|Token)$")
+MISSING = object()
+
 # Values the database fills in differ between runs and between orders.
 GENERATED = re.compile(r"nextval\(|now\(\)|current_(time|date)|localtime|_timestamp\(|random|uuid", re.I)
 
@@ -128,6 +133,7 @@ class Outcome:
     events: list
     failed: list
     how: str = "serial"
+    bodies: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -146,6 +152,7 @@ class Pair:
     ignored: set
     schedules: list = field(default_factory=list)
     skipped: bool = False
+    loose: dict = field(default_factory=dict)
 
     @property
     def races(self):
@@ -245,6 +252,7 @@ class Explorer:
         self.alive = alive or (lambda: True)
         self.all_pairs = all_pairs
         self.restore = None
+        self.loose = {}
         self.runs = 0
         self.warnings = []
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -258,6 +266,8 @@ class Explorer:
         self.tables, self.ignored, self.fks = await self.introspect()
         self.ignored |= self.s.ignore
         self.fks.update(self.s.refs)
+        # logins come first, so the sessions they create are part of the saved data
+        await self.login()
         if not self.s.setup:
             self.restore = await self.save()
         try:
@@ -267,6 +277,22 @@ class Explorer:
                 # leave the database the way it was found
                 await self.revert()
                 await self.db.execute(pgsql.SQL("DROP SCHEMA {} CASCADE").format(pgsql.Identifier(SNAPSHOT)))
+
+    async def login(self):
+        """Run each login once and put what it captured into the requests."""
+        values = {}
+        self.rec.begin()
+        self.rec.who = "bg"
+        for login in self.s.logins:
+            status, body, headers = await self.send(login.request)
+            if not 200 <= status < 300:
+                raise RunError(f"login {login.name} answered {status or 'nothing'}")
+            for var, source in login.capture.items():
+                values[f"{login.name}.{var}"] = captured(source, body, headers, login.name)
+        for r in self.s.requests:
+            r.path, r.headers, r.json = fill(r.path, values), fill(r.headers, values), fill(r.json, values)
+        if self.s.logins:
+            await self.rec.quiet()
 
     async def explore(self, start):
         await self.learn_background()
@@ -278,6 +304,7 @@ class Explorer:
             first = await self.serial([("A", r)])
             again = await self.serial([("A", r)])
             self.ignored |= unstable(first.snapshot, again.snapshot)
+            self.loose[r.name] = differing(first.bodies["A"], again.bodies["A"])
             if first.statuses != again.statuses:
                 self.warn(f"{r.name} answered {first.statuses['A']} then {again.statuses['A']} from the same state")
             for q in first.failed:
@@ -317,25 +344,27 @@ class Explorer:
         again = await self.serial([("A", a), ("B", b)])
         # rows only a pair writes, like a waitlist entry, can carry their own timestamps
         ignored = self.ignored | unstable(ab.snapshot, again.snapshot)
+        # the same goes for response fields, like a position in a queue stamped with the time
+        loose = {role: self.loose[r.name] | differing(ab.bodies[role], again.bodies[role]) for role, r in (("A", a), ("B", b))}
         if ab.statuses != again.statuses:
             self.warn(f"{a.name} then {b.name} answered differently on two identical runs")
         if a is b:
-            ba = Outcome({"A": ab.statuses["B"], "B": ab.statuses["A"]}, ab.snapshot, [], ab.failed)
+            ba = Outcome({"A": ab.statuses["B"], "B": ab.statuses["A"]}, ab.snapshot, [], ab.failed, bodies={"A": ab.bodies["B"], "B": ab.bodies["A"]})
         else:
             ba = await self.serial([("B", b), ("A", a)])
         for q in set(ab.failed) | set(ba.failed):
             self.warn(f"invariant fails even when {a.name} and {b.name} run one at a time: {q}")
-        pair = Pair(a, b, trace, [ab, ba], ignored)
+        pair = Pair(a, b, trace, [ab, ba], ignored, loose=loose)
         points = holds(trace)
         for hold in points:
             outcome = await self.forced(a, b, hold)
             if not outcome:
                 continue
-            reasons = judge(outcome, pair.serials, ignored, self.fks)
+            reasons = judge(outcome, pair.serials, ignored, self.fks, loose)
             if reasons:
                 # a forced order repeats exactly, so a race that does not is noise
                 again = await self.forced(a, b, hold)
-                if not again or not judge(again, pair.serials, ignored, self.fks):
+                if not again or not judge(again, pair.serials, ignored, self.fks, loose):
                     self.warn(f"{a.name} vs {b.name}: an order raced once and passed when repeated, so it is not reported")
                     reasons = []
             pair.schedules.append(Schedule(hold, outcome, reasons))
@@ -348,7 +377,7 @@ class Explorer:
         await self.reset()
         rec = self.rec
         rec.begin(hold)
-        task_a = asyncio.create_task(self.send(a))
+        task_a = asyncio.create_task(self.ask(a))
         reached = asyncio.create_task(rec.reached.wait())
         try:
             await asyncio.wait({task_a, reached}, return_when=asyncio.FIRST_COMPLETED)
@@ -360,15 +389,16 @@ class Explorer:
                 return None
             rec.who = "B"
             started = time.perf_counter()
-            task_b = asyncio.create_task(self.send(b))
+            task_b = asyncio.create_task(self.ask(b))
             how = await self.watch(task_b, rec.held.pid, started)
             rec.release()
-            statuses = dict(zip("AB", await asyncio.gather(task_a, task_b), strict=True))
+            answers = await asyncio.gather(task_a, task_b)
         finally:
             rec.release()
             reached.cancel()
         await rec.quiet()
-        return Outcome(statuses, await self.snapshot(), rec.events, await self.check(), how)
+        statuses, bodies = ({role: answer[i] for role, answer in zip("AB", answers, strict=True)} for i in (0, 1))
+        return Outcome(statuses, await self.snapshot(), rec.events, await self.check(), how, bodies)
 
     async def watch(self, task, held_pid, started):
         """Let B run until it finishes, waits on a lock A holds, or goes quiet."""
@@ -388,14 +418,14 @@ class Explorer:
             raise RunError("the app exited during the run")
         await self.reset()
         self.rec.begin()
-        statuses = {}
+        statuses, bodies = {}, {}
         for role, req in order:
             self.rec.who = role
-            statuses[role] = await self.send(req)
+            statuses[role], bodies[role] = await self.ask(req)
             if not statuses[role]:
                 raise RunError(f"{req.name} got no response from {self.s.app}. Did the app stop?")
             await self.rec.quiet()
-        return Outcome(statuses, await self.snapshot(), self.rec.events, await self.check())
+        return Outcome(statuses, await self.snapshot(), self.rec.events, await self.check(), bodies=bodies)
 
     async def reset(self):
         self.runs += 1
@@ -479,28 +509,41 @@ class Explorer:
     async def send(self, req):
         return await asyncio.to_thread(self._http, req)
 
+    async def ask(self, req):
+        """Send a request. Returns its status, and its body when bodies are compared."""
+        status, body, _ = await self.send(req)
+        return status, body.decode("utf-8", "replace") if self.s.bodies else None
+
     def _http(self, req):
         data = None if req.json is None else json.dumps(req.json).encode()
         headers = {"content-type": "application/json", **req.headers} if data else req.headers
         r = urllib.request.Request(self.s.app + req.path, data=data, method=req.method, headers=headers)
         try:
-            with self.http.open(r, timeout=30) as resp:
-                resp.read()
-                return resp.status
-        except urllib.error.HTTPError as e:
-            return e.code
+            try:
+                resp = self.http.open(r, timeout=30)
+            except urllib.error.HTTPError as e:
+                resp = e  # an error status still has a body and headers worth reading
+            with resp:
+                return resp.code, resp.read(), resp.headers
         except (OSError, http.client.HTTPException):
-            return 0
+            return 0, b"", None
 
 
-def judge(outcome, serials, ignored, fks=None):
+def judge(outcome, serials, ignored, fks=None, loose=None):
     """Why this outcome is impossible in any serial order. Empty if it is possible."""
+
+    def answers(o):
+        return {role: (status, body_key(o.bodies.get(role), (loose or {}).get(role, ()))) for role, status in o.statuses.items()}
+
+    mine, theirs = answers(outcome), [answers(s) for s in serials]
     state = normalize(outcome.snapshot, ignored, fks)
     states = [normalize(s.snapshot, ignored, fks) for s in serials]
     reasons = []
-    if not any(outcome.statuses == s.statuses and state == st for s, st in zip(serials, states, strict=True)):
+    if not any(mine == t and state == st for t, st in zip(theirs, states, strict=True)):
         if not any(outcome.statuses == s.statuses for s in serials):
             reasons.append("responses match no serial order")
+        elif mine not in theirs:
+            reasons.append("response bodies match no serial order")
         if not any(state == st for st in states):
             reasons.append("final data matches no serial order")
         if not reasons:
@@ -514,6 +557,74 @@ def judge(outcome, serials, ignored, fks=None):
         if "40001" in codes:
             reasons.append("a serialization failure was not retried")
     return reasons
+
+
+def flat(body):
+    """A response body as {path: value}. A body that is not JSON is one value."""
+    try:
+        root = json.loads(body)
+    except ValueError:
+        return {(): body}
+    out = {}
+
+    def walk(node, path):
+        if isinstance(node, (dict, list)) and node:
+            for key, value in node.items() if isinstance(node, dict) else enumerate(node):
+                walk(value, path + (key,))
+        else:
+            out[path] = node
+
+    walk(root, ())
+    return out
+
+
+def differing(first, again):
+    """Paths whose values differ between the bodies of two identical runs."""
+    if first is None or again is None:
+        return set()
+    a, b = flat(first), flat(again)
+    return {path for path in a.keys() | b.keys() if a.get(path, MISSING) != b.get(path, MISSING)}
+
+
+def body_key(body, loose):
+    """What is left of a body to compare: no ids, tokens or timestamps, and no field that changes on its own."""
+    if body is None:
+        return None
+    kept = set()
+    for path, value in flat(body).items():
+        names = [key for key in path if isinstance(key, str)]
+        if path not in loose and not (names and GENERATED_KEY.search(names[-1])):
+            kept.add((path, repr(value)))
+    return frozenset(kept)
+
+
+def captured(source, body, headers, who):
+    """What a login hands on: a field of its JSON body, or a response header named after 'header:'."""
+    if source.lower().startswith("header:"):
+        name = source[7:].strip()
+        values = headers.get_all(name) or []
+        if not values:
+            raise RunError(f"login {who}: the response has no {name} header")
+        # a Set-Cookie value carries attributes after its first part, which a Cookie header must not repeat
+        return "; ".join(value.split(";")[0] for value in values)
+    try:
+        node = json.loads(body)
+        for part in source.split("."):
+            node = node[int(part)] if isinstance(node, list) else node[part]
+    except (ValueError, LookupError, TypeError):
+        raise RunError(f"login {who}: the response has no {source}") from None
+    return str(node)
+
+
+def fill(node, values):
+    """Put captured login values into every ${login.name} of a path, headers or a JSON body."""
+    if isinstance(node, str):
+        return REF.sub(lambda m: values[f"{m[1]}.{m[2]}"], node)
+    if isinstance(node, dict):
+        return {key: fill(value, values) for key, value in node.items()}
+    if isinstance(node, list):
+        return [fill(value, values) for value in node]
+    return node
 
 
 def shape(sql):

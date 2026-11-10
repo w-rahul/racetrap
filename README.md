@@ -45,7 +45,7 @@ There is nothing to reset by hand. racetrap saves your tables before it starts, 
 
 ```
 $ racetrap examples/tickets/buggy.toml
-racetrap 0.3.0
+racetrap 0.4.0
 proxy  127.0.0.1:6499 -> localhost:5432
 app    http://127.0.0.1:8765
 
@@ -81,7 +81,7 @@ A pass says nothing about:
 
 - races that need three or more requests, or more than one switch between the two
 - starting data other than what the database holds when racetrap starts
-- effects racetrap does not compare, such as response bodies, emails, queues and caches
+- effects racetrap does not compare, such as emails, queues and caches
 - statements the app sends after it has answered, which racetrap warns about
 - anything guarded outside Postgres
 
@@ -146,7 +146,25 @@ json = { user = "bob" }
 | `invariants` | Optional SQL that must return true after every order. |
 | `ignore` | Optional `table.column` entries to leave out of the comparison. |
 | `refs` | Optional id references without a foreign key, like `{ "orders.user_id" = "users.id" }`. |
+| `[[login]]` | Optional. A request sent once before the run, with `capture` naming what to keep from its response. |
+| `bodies` | Set to `false` to compare status codes only. Default `true`. |
 | `proxy`, `database_env`, `schema`, `stall_ms` | Defaults `127.0.0.1:6499`, `DATABASE_URL`, `public` and `1000`. |
+
+For an API that needs a logged in user, add a login and use what it captured:
+
+```toml
+[[login]]
+name = "alice"
+path = "/login"
+json = { email = "alice@example.com", password = "secret" }
+capture = { token = "access_token" }
+
+[[request]]
+name = "alice buys"
+path = "/items/1/buy"
+json = { quantity = 1 }
+headers = { authorization = "Bearer ${alice.token}" }
+```
 
 `${NAME}` is read from the environment. Each request is also paired with itself, which catches double submits. The [reference](https://github.com/w-rahul/racetrap/blob/main/docs/reference.md) covers every key, the command line and the JSON results.
 
@@ -168,7 +186,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: pip install -r requirements.txt
-      - uses: w-rahul/racetrap@v0.3.0
+      - uses: w-rahul/racetrap@v0.4.0
         with:
           scenario: racetrap.toml
 ```
@@ -177,9 +195,9 @@ The job fails when any pair races, and the HTML report is uploaded as an artifac
 
 ## How it decides
 
-The check is serializability. Every outcome must match running the two requests one after the other, in some order. racetrap compares the HTTP status of each request and the rows of every table.
+The check is serializability. Every outcome must match running the two requests one after the other, in some order. racetrap compares the HTTP status and body of each request, and the rows of every table. An API that answers 200 for everything is still checked, through what its bodies say.
 
-Values the database fills in differ between correct runs, so ids, timestamps and random values are left out, and a reference to a generated id is compared by the row it points to. A deadlock or an unretried serialization failure that turns into a 500 counts as a race. racetrap stops instead of passing if the app dies, and the exit code is 1 when any pair races, so it can fail a CI job.
+Values the database fills in differ between correct runs, so ids, timestamps and random values are left out, and a reference to a generated id is compared by the row it points to. Response bodies get the same care: fields named like ids, tokens and timestamps are left out, and so is any field that changes between two identical runs. A deadlock or an unretried serialization failure that turns into a 500 counts as a race. racetrap stops instead of passing if the app dies, and the exit code is 1 when any pair races, so it can fail a CI job.
 
 ## Compatibility
 

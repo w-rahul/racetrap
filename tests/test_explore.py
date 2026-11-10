@@ -1,8 +1,16 @@
+import http.client
 from collections import Counter
+
+import pytest
 
 from racetrap.explore import (
     Event,
     Outcome,
+    RunError,
+    body_key,
+    captured,
+    differing,
+    fill,
     footprint,
     holds,
     independent,
@@ -129,3 +137,61 @@ def test_generated_ids_compare_by_the_rows_they_point_to():
 def test_shape_blanks_literals_but_keeps_placeholders():
     assert shape("UPDATE t SET n = 5, s = 'it''s' WHERE id = 12") == "UPDATE t SET n = ?, s = ? WHERE id = ?"
     assert shape("SELECT * FROM t1 WHERE id = $1") == "SELECT * FROM t1 WHERE id = $1"
+
+
+def answered(a, b, *users, a_body, b_body):
+    out = outcome(a, b, *users)
+    out.bodies = {"A": a_body, "B": b_body}
+    return out
+
+
+# An API that answers 200 for everything and says what happened in the body.
+WON, LOST = '{"booked": true, "id": 7}', '{"booked": false, "error": "sold out"}'
+BODY_SERIALS = [answered(200, 200, "alice", a_body=WON, b_body=LOST), answered(200, 200, "bob", a_body=LOST, b_body=WON)]
+
+
+def test_bodies_tell_a_race_when_every_status_is_200():
+    both_won = answered(200, 200, "alice", "bob", a_body=WON, b_body=WON)
+    assert judge(both_won, BODY_SERIALS, IGNORED) == ["response bodies match no serial order", "final data matches no serial order"]
+    assert judge(answered(200, 200, "bob", a_body=LOST, b_body=WON), BODY_SERIALS, IGNORED) == []
+
+
+def test_generated_and_unstable_fields_do_not_count():
+    # the id differs, and so does a field that changed between two identical runs
+    other_id = answered(200, 200, "alice", a_body='{"booked": true, "id": 9, "queue": 3}', b_body=LOST)
+    serials = [answered(200, 200, "alice", a_body='{"booked": true, "id": 7, "queue": 1}', b_body=LOST), BODY_SERIALS[1]]
+    assert judge(other_id, serials, IGNORED, loose={"A": {("queue",)}, "B": set()}) == []
+    assert judge(other_id, serials, IGNORED) == ["response bodies match no serial order"]
+
+
+def test_differing_finds_fields_that_change_on_their_own():
+    first = '{"user": {"name": "alice", "seen": "10:00:01"}, "tags": ["a"]}'
+    again = '{"user": {"name": "alice", "seen": "10:00:02"}, "tags": ["a", "b"]}'
+    assert differing(first, again) == {("user", "seen"), ("tags", 1)}
+    assert differing("plain text", "other text") == {()}
+    assert differing(None, None) == set()
+
+
+def test_body_key_drops_ids_tokens_and_timestamps():
+    body = '{"id": 1, "user_id": 2, "createdAt": "x", "access_token": "t", "seat": "F12", "items": [{"orderId": 5, "qty": 2}]}'
+    assert body_key(body, set()) == {(("seat",), "'F12'"), (("items", 0, "qty"), "2")}
+    assert body_key(None, set()) is None
+
+
+def test_captured_reads_json_fields_and_headers():
+    headers = http.client.HTTPMessage()
+    headers["Set-Cookie"] = "session=abc; Path=/; HttpOnly"
+    headers["Set-Cookie"] = "csrf=xyz; Path=/"
+    body = b'{"data": {"tokens": [{"value": "t-1"}]}}'
+    assert captured("data.tokens.0.value", body, headers, "alice") == "t-1"
+    assert captured("header:set-cookie", body, headers, "alice") == "session=abc; csrf=xyz"
+    with pytest.raises(RunError, match="no data.missing"):
+        captured("data.missing", body, headers, "alice")
+    with pytest.raises(RunError, match="no x-token header"):
+        captured("header:x-token", body, headers, "alice")
+
+
+def test_fill_puts_captured_values_everywhere():
+    values = {"alice.token": "t-1"}
+    assert fill("/users/${alice.token}", values) == "/users/t-1"
+    assert fill({"authorization": "Bearer ${alice.token}", "n": [1, "${alice.token}"]}, values) == {"authorization": "Bearer t-1", "n": [1, "t-1"]}

@@ -76,3 +76,31 @@ def test_pairs_that_share_no_tables_are_skipped(tmp_path, monkeypatch):
     assert skipped == {("alice", "bob"), ("bob", "alice")}
     assert all(p.schedules for p in result.pairs if not p.skipped)
     assert not [p for p in result.pairs if p.races]
+
+
+LOGGED_IN = """
+[[login]]
+name = "USER"
+path = "/login"
+json = { user = "USER" }
+capture = { token = "access_token", cookie = "header:set-cookie" }
+
+[[request]]
+name = "USER takes"
+method = "POST"
+path = "/account/take"
+headers = { authorization = "Bearer ${USER.token}", cookie = "${USER.cookie}" }
+"""
+
+
+@needs_db
+def test_requests_use_what_a_login_captured(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    head = SCENARIO.split("[[request]]")[0].replace("APP_DIR", str(Path(__file__).parent))
+    text = head + LOGGED_IN.replace("USER", "alice") + LOGGED_IN.replace("USER", "bob")
+    (tmp_path / "shop.toml").write_text(text, encoding="utf-8")
+    result = run_async(asyncio.wait_for(run(load(tmp_path / "shop.toml")), 120))
+    # without the token and the cookie every request would answer 401
+    assert all(set(s.statuses.values()) == {200} for p in result.pairs for s in p.serials)
+    assert all(p.schedules for p in result.pairs)
+    assert not [p for p in result.pairs if p.races]

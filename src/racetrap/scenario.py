@@ -1,11 +1,15 @@
 """Scenario files: which requests to race, against which app and database."""
 
+import json
 import os
 import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
+
+# A value a login captured, written as ${login.name}.
+REF = re.compile(r"\$\{(\w+)\.(\w+)\}")
 
 
 class ScenarioError(Exception):
@@ -19,6 +23,15 @@ class Request:
     path: str
     json: object = None
     headers: dict = field(default_factory=dict)
+
+
+@dataclass
+class Login:
+    """A request sent once before the run, and what to keep from its response."""
+
+    name: str
+    request: Request
+    capture: dict
 
 
 @dataclass
@@ -37,6 +50,8 @@ class Scenario:
     database_env: str = "DATABASE_URL"
     schema: str = "public"
     stall: float = 1.0
+    logins: list = field(default_factory=list)
+    bodies: bool = True
 
     @property
     def upstream(self):
@@ -70,6 +85,19 @@ def load(path):
     names = [r.name for r in requests]
     if len(set(names)) != len(names):
         raise ScenarioError(f"{path.name}: request names must be unique")
+
+    logins = []
+    for i, raw in enumerate(get("login", list, [])):
+        request = _request(raw, i, f"{path.name} login")
+        capture = raw.get("capture")
+        if not isinstance(capture, dict) or not capture or not all(isinstance(v, str) for v in capture.values()):
+            raise ScenarioError(f'{path.name}: login {request.name} needs capture, like {{ token = "access_token" }}')
+        logins.append(Login(request.name, request, capture))
+    known = {f"{login.name}.{var}" for login in logins for var in login.capture}
+    for r in requests:
+        for name, var in REF.findall(json.dumps([r.path, r.headers, r.json])):
+            if f"{name}.{var}" not in known:
+                raise ScenarioError(f"{path.name}: {r.name} uses ${{{name}.{var}}}, but no login captures it")
 
     host, _, port = get("proxy", str, "127.0.0.1:6499").rpartition(":")
     if not host or not port.isdigit():
@@ -107,6 +135,8 @@ def load(path):
         database_env=get("database_env", str, "DATABASE_URL"),
         schema=get("schema", str, "public"),
         stall=stall / 1000,
+        logins=logins,
+        bodies=get("bodies", bool, True),
     )
 
 
