@@ -11,6 +11,7 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 - A pytest plugin. `pytest racetrap.toml` runs a scenario as one test per pair.
 - `--junit PATH` writes the results as JUnit XML.
 - The GitHub Action takes `args`, for extra command line options.
+- Type hints on the whole package, checked by mypy in strict mode in CI.
 
 ### Changed
 

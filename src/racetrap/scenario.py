@@ -4,12 +4,17 @@ import json
 import os
 import re
 import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 # A value a login captured, written as ${login.name}.
 REF = re.compile(r"\$\{(\w+)\.(\w+)\}")
+
+# A table and one of its columns.
+Column = tuple[str, str]
 
 
 class ScenarioError(Exception):
@@ -21,8 +26,8 @@ class Request:
     name: str
     method: str
     path: str
-    json: object = None
-    headers: dict = field(default_factory=dict)
+    json: Any = None
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -31,7 +36,7 @@ class Login:
 
     name: str
     request: Request
-    capture: dict
+    capture: dict[str, str]
 
 
 @dataclass
@@ -39,27 +44,27 @@ class Scenario:
     path: Path
     app: str
     database: str
-    requests: list
-    setup: list = field(default_factory=list)
-    init: list = field(default_factory=list)
-    invariants: list = field(default_factory=list)
-    ignore: set = field(default_factory=set)
-    refs: dict = field(default_factory=dict)
-    proxy: tuple = ("127.0.0.1", 6499)
+    requests: list[Request]
+    setup: list[str] = field(default_factory=list)
+    init: list[str] = field(default_factory=list)
+    invariants: list[str] = field(default_factory=list)
+    ignore: set[Column] = field(default_factory=set)
+    refs: dict[Column, Column] = field(default_factory=dict)
+    proxy: tuple[str, int] = ("127.0.0.1", 6499)
     command: str | None = None
     database_env: str = "DATABASE_URL"
     schema: str = "public"
     stall: float = 1.0
-    logins: list = field(default_factory=list)
+    logins: list[Login] = field(default_factory=list)
     bodies: bool = True
 
     @property
-    def upstream(self):
+    def upstream(self) -> tuple[str, int]:
         u = urlsplit(self.database)
         return u.hostname or "127.0.0.1", u.port or 5432
 
     @property
-    def proxied_database(self):
+    def proxied_database(self) -> str:
         """The database URL with the proxy in place of the real server."""
         u = urlsplit(with_address(self.database, *self.proxy))
         if "sslmode=" not in u.query and "channel_binding=" not in u.query:
@@ -69,14 +74,14 @@ class Scenario:
         return urlunsplit(u._replace(query=urlencode(query, quote_via=quote)))
 
 
-def with_address(url, host, port):
+def with_address(url: str, host: str, port: int) -> str:
     u = urlsplit(url)
     auth = u.netloc.rpartition("@")[0]
     netloc = f"{host}:{port}" if not auth else f"{auth}@{host}:{port}"
     return urlunsplit(u._replace(netloc=netloc))
 
 
-def load(path):
+def load(path: str | Path) -> Scenario:
     path = Path(path)
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -145,8 +150,8 @@ def load(path):
     )
 
 
-def _column_parser(where):
-    def column(item, key):
+def _column_parser(where: str) -> Callable[[object, str], Column]:
+    def column(item: object, key: str) -> Column:
         table, dot, name = str(item).partition(".")
         if not dot or not table or not name:
             raise ScenarioError(f"{where}: {key} entries look like table.column, got {item!r}")
@@ -158,8 +163,8 @@ def _column_parser(where):
 _REQUIRED = object()
 
 
-def _getter(data, where):
-    def get(key, kind, default=_REQUIRED):
+def _getter(data: dict[str, Any], where: str) -> Callable[..., Any]:
+    def get(key: str, kind: type, default: Any = _REQUIRED) -> Any:
         if key not in data:
             if default is _REQUIRED:
                 raise ScenarioError(f"{where}: missing {key!r}")
@@ -171,7 +176,7 @@ def _getter(data, where):
     return get
 
 
-def _request(raw, i, where):
+def _request(raw: Any, i: int, where: str) -> Request:
     if not isinstance(raw, dict):
         raise ScenarioError(f"{where}: request {i + 1} must be a table")
     get = _getter(raw, f"{where} request {i + 1}")
@@ -187,14 +192,14 @@ def _request(raw, i, where):
     )
 
 
-def _sql_list(items, key, where):
+def _sql_list(items: list[Any], key: str, where: str) -> list[str]:
     if not all(isinstance(s, str) for s in items):
         raise ScenarioError(f"{where}: {key} must be a list of SQL strings")
     return items
 
 
-def _expand(value):
-    def sub(m):
+def _expand(value: str) -> str:
+    def sub(m: re.Match[str]) -> str:
         if m[1] not in os.environ:
             raise ScenarioError(f"environment variable {m[1]} is not set")
         return os.environ[m[1]]

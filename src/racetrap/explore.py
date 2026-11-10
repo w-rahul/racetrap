@@ -20,13 +20,15 @@ import time
 import urllib.error
 import urllib.request
 from collections import Counter
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 import psycopg
 from psycopg import sql as pgsql
 
-from .proxy import Hooks
-from .scenario import REF
+from .proxy import Conn, Hooks
+from .scenario import REF, Column, Request, Scenario
 
 COLUMNS = """
 SELECT c.table_name, c.column_name, coalesce(c.column_default, ''), c.is_identity
@@ -114,6 +116,17 @@ SELECT EXISTS (
 """
 
 
+# A table as its column names and its rows, and every table by name.
+Table = tuple[list[str], list[tuple[Any, ...]]]
+Snapshot = dict[str, Table]
+# Where a value sits in a JSON body: keys and list positions.
+BodyPath = tuple[str | int, ...]
+# A statement shape, and which time the request sends it.
+Hold = tuple[str, int]
+# The tables a request touched and the ones it wrote. None when its SQL cannot tell.
+Footprint = tuple[set[str], set[str]] | None
+
+
 class RunError(Exception):
     pass
 
@@ -129,74 +142,74 @@ class Event:
 
 @dataclass
 class Outcome:
-    statuses: dict
-    snapshot: dict
-    events: list
-    failed: list
+    statuses: dict[str, int]
+    snapshot: Snapshot
+    events: list[Event]
+    failed: list[str]
     how: str = "serial"
-    bodies: dict = field(default_factory=dict)
+    bodies: dict[str, str | None] = field(default_factory=dict)
 
 
 @dataclass
 class Schedule:
-    hold: tuple
+    hold: Hold
     outcome: Outcome
-    reasons: list
+    reasons: list[str]
 
 
 @dataclass
 class Pair:
-    a: object
-    b: object
-    trace: list
-    serials: list
-    ignored: set
-    schedules: list = field(default_factory=list)
+    a: Request
+    b: Request
+    trace: list[str]
+    serials: list[Outcome]
+    ignored: set[Column]
+    schedules: list[Schedule] = field(default_factory=list)
     skipped: bool = False
-    loose: dict = field(default_factory=dict)
+    loose: dict[str, set[BodyPath]] = field(default_factory=dict)
 
     @property
-    def races(self):
+    def races(self) -> list[Schedule]:
         return [s for s in self.schedules if s.reasons]
 
 
 @dataclass
 class Result:
-    pairs: list
-    ignored: set
-    fks: dict
+    pairs: list[Pair]
+    ignored: set[Column]
+    fks: dict[Column, Column]
     runs: int
     seconds: float
-    warnings: list
+    warnings: list[str]
 
 
 class Recorder(Hooks):
     """Records each request's statements and can hold request A at one of them."""
 
-    def __init__(self):
-        self.conns = {}
-        self.background = set()
+    def __init__(self) -> None:
+        self.conns: dict[int, Conn] = {}
+        self.background: set[str] = set()
         self.begin()
 
-    def begin(self, hold=None):
+    def begin(self, hold: Hold | None = None) -> None:
         self.t0 = self.active = time.perf_counter()
-        self.last = {}
-        self.events = []
-        self.who = "A"
-        self.owner = {}
+        self.last: dict[str, float] = {}
+        self.events: list[Event] = []
+        self.who: str | None = "A"
+        self.owner: dict[int, str] = {}
         self.hold = hold
-        self.seen = Counter()
-        self.held = None
+        self.seen: Counter[str] = Counter()
+        self.held: Conn | None = None
         self.reached = asyncio.Event()
         self.gate = asyncio.Event()
 
-    def opened(self, conn):
+    def opened(self, conn: Conn) -> None:
         self.conns[conn.id] = conn
 
-    def closed(self, conn):
+    def closed(self, conn: Conn) -> None:
         self.conns.pop(conn.id, None)
 
-    async def before(self, conn, sqls):
+    async def before(self, conn: Conn, sqls: list[str]) -> None:
         if all(shape(s) in self.background for s in sqls):
             # the app sends this on its own, like a poller, so no request owns it
             self.owner[conn.id] = "bg"
@@ -219,25 +232,25 @@ class Recorder(Hooks):
         for sql in sqls:
             self._log(conn, "sql", sql, who)
 
-    def done(self, conn, tag=None, error=None):
+    def done(self, conn: Conn, tag: str | None = None, error: dict[str, str] | None = None) -> None:
         if error:
             self._log(conn, "error", f"{error.get('C', '')} {error.get('M', '')}".strip())
         else:
             self._log(conn, "ok", tag or "")
 
-    def release(self):
+    def release(self) -> None:
         """Let A go, and disarm the hold so nothing that arrives later is parked."""
         self.who = None
         self.hold = None
         self.gate.set()
 
-    async def quiet(self, gap=0.05, limit=3.0):
+    async def quiet(self, gap: float = 0.05, limit: float = 3.0) -> None:
         """Wait until the app has sent nothing for `gap` seconds."""
         end = time.perf_counter() + limit
         while time.perf_counter() < end and time.perf_counter() - self.active < gap:
             await asyncio.sleep(gap / 4)
 
-    def _log(self, conn, kind, text, who=None):
+    def _log(self, conn: Conn, kind: str, text: str, who: str | None = None) -> None:
         self.active = time.perf_counter()
         who = who or self.owner.get(conn.id, "?")
         self.last[who] = self.active
@@ -245,25 +258,34 @@ class Recorder(Hooks):
 
 
 class Explorer:
-    def __init__(self, scenario, db, recorder, progress=None, alive=None, all_pairs=False, share=(0, 1)):
+    def __init__(
+        self,
+        scenario: Scenario,
+        db: psycopg.AsyncConnection[Any],
+        recorder: Recorder,
+        progress: Callable[[Pair], None] | None = None,
+        alive: Callable[[], bool] | None = None,
+        all_pairs: bool = False,
+        share: tuple[int, int] = (0, 1),
+    ) -> None:
         self.s = scenario
         self.db = db
         self.rec = recorder
-        self.progress = progress or (lambda pair: None)
-        self.alive = alive or (lambda: True)
+        self.progress: Callable[[Pair], None] = progress or (lambda pair: None)
+        self.alive: Callable[[], bool] = alive or (lambda: True)
         self.all_pairs = all_pairs
         self.share = share
-        self.restore = None
-        self.loose = {}
+        self.restore: pgsql.Composed | None = None
+        self.loose: dict[str, set[BodyPath]] = {}
         self.runs = 0
-        self.warnings = []
+        self.warnings: list[str] = []
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
-    def warn(self, message):
+    def warn(self, message: str) -> None:
         if message not in self.warnings:
             self.warnings.append(message)
 
-    async def run(self):
+    async def run(self) -> Result:
         start = time.perf_counter()
         self.tables, self.ignored, self.fks = await self.introspect()
         self.ignored |= self.s.ignore
@@ -280,9 +302,9 @@ class Explorer:
                 await self.revert()
                 await self.db.execute(pgsql.SQL("DROP SCHEMA {} CASCADE").format(pgsql.Identifier(SNAPSHOT)))
 
-    async def login(self):
+    async def login(self) -> None:
         """Run each login once and put what it captured into the requests."""
-        values = {}
+        values: dict[str, str] = {}
         self.rec.begin()
         self.rec.who = "bg"
         for login in self.s.logins:
@@ -296,12 +318,13 @@ class Explorer:
         if self.s.logins:
             await self.rec.quiet()
 
-    async def explore(self, start):
+    async def explore(self, start: float) -> Result:
         await self.learn_background()
         names, opaque, parents, children = await self.catalog()
         await self.revert()
         base = await self.snapshot()
-        traces, feet = {}, {}
+        traces: dict[str, list[str]] = {}
+        feet: dict[str, Footprint] = {}
         for r in self.s.requests:
             first = await self.serial([("A", r)])
             again = await self.serial([("A", r)])
@@ -333,7 +356,7 @@ class Explorer:
         ignored = self.ignored.union(*(p.ignored for p in pairs))
         return Result(pairs, ignored, self.fks, self.runs, time.perf_counter() - start, self.warnings)
 
-    async def learn_background(self, seconds=1.0):
+    async def learn_background(self, seconds: float = 1.0) -> None:
         """Watch the app with no request in flight. What it sends then is its own."""
         self.rec.begin()
         self.rec.who = "bg"
@@ -343,7 +366,7 @@ class Explorer:
             listed = " | ".join(" ".join(s.split()) for s in sorted(self.rec.background))[:200]
             self.warn(f"the app sends SQL on its own, which is left out of every request: {listed}")
 
-    async def pair(self, a, b, trace):
+    async def pair(self, a: Request, b: Request, trace: list[str]) -> Pair:
         ab = await self.serial([("A", a), ("B", b)])
         again = await self.serial([("A", a), ("B", b)])
         # rows only a pair writes, like a waitlist entry, can carry their own timestamps
@@ -367,8 +390,8 @@ class Explorer:
             reasons = judge(outcome, pair.serials, ignored, self.fks, loose)
             if reasons:
                 # a forced order repeats exactly, so a race that does not is noise
-                again = await self.forced(a, b, hold)
-                if not again or not judge(again, pair.serials, ignored, self.fks, loose):
+                repeat = await self.forced(a, b, hold)
+                if not repeat or not judge(repeat, pair.serials, ignored, self.fks, loose):
                     self.warn(f"{a.name} vs {b.name}: an order raced once and passed when repeated, so it is not reported")
                     reasons = []
             pair.schedules.append(Schedule(hold, outcome, reasons))
@@ -377,7 +400,7 @@ class Explorer:
             self.warn(f"{a.name} vs {b.name}: {missed} of {len(points)} statements were sent after the response or changed between runs, so they were not tested")
         return pair
 
-    async def forced(self, a, b, hold):
+    async def forced(self, a: Request, b: Request, hold: Hold) -> Outcome | None:
         await self.reset()
         rec = self.rec
         rec.begin(hold)
@@ -385,7 +408,8 @@ class Explorer:
         reached = asyncio.create_task(rec.reached.wait())
         try:
             await asyncio.wait({task_a, reached}, return_when=asyncio.FIRST_COMPLETED)
-            if not rec.reached.is_set():
+            held = rec.held
+            if not rec.reached.is_set() or held is None:
                 # A answered without sending that statement, so this order does not exist
                 rec.release()
                 await task_a
@@ -394,17 +418,18 @@ class Explorer:
             rec.who = "B"
             started = time.perf_counter()
             task_b = asyncio.create_task(self.ask(b))
-            how = await self.watch(task_b, rec.held.pid, started)
+            how = await self.watch(task_b, held.pid, started)
             rec.release()
             answers = await asyncio.gather(task_a, task_b)
         finally:
             rec.release()
             reached.cancel()
         await rec.quiet()
-        statuses, bodies = ({role: answer[i] for role, answer in zip("AB", answers, strict=True)} for i in (0, 1))
+        statuses = {role: answer[0] for role, answer in zip("AB", answers, strict=True)}
+        bodies = {role: answer[1] for role, answer in zip("AB", answers, strict=True)}
         return Outcome(statuses, await self.snapshot(), rec.events, await self.check(), how, bodies)
 
-    async def watch(self, task, held_pid, started):
+    async def watch(self, task: asyncio.Task[Any], held_pid: int | None, started: float) -> str:
         """Let B run until it finishes, waits on a lock A holds, or goes quiet."""
         while True:
             done, _ = await asyncio.wait({task}, timeout=0.02)
@@ -417,12 +442,13 @@ class Explorer:
             if time.perf_counter() - max(started, self.rec.last.get("B", started)) > self.s.stall:
                 return "stalled"
 
-    async def serial(self, order):
+    async def serial(self, order: list[tuple[str, Request]]) -> Outcome:
         if not self.alive():
             raise RunError("the app exited during the run")
         await self.reset()
         self.rec.begin()
-        statuses, bodies = {}, {}
+        statuses: dict[str, int] = {}
+        bodies: dict[str, str | None] = {}
         for role, req in order:
             self.rec.who = role
             statuses[role], bodies[role] = await self.ask(req)
@@ -431,11 +457,11 @@ class Explorer:
             await self.rec.quiet()
         return Outcome(statuses, await self.snapshot(), self.rec.events, await self.check(), bodies=bodies)
 
-    async def reset(self):
+    async def reset(self) -> None:
         self.runs += 1
         await self.revert()
 
-    async def revert(self):
+    async def revert(self) -> None:
         """Put the data back: the saved tables, or the scenario's own setup."""
         if self.restore:
             async with self.db.transaction():
@@ -444,7 +470,7 @@ class Explorer:
             # never prepared, so a setup string can hold several statements
             await self.db.execute(q, prepare=False)
 
-    async def save(self):
+    async def save(self) -> pgsql.Composed:
         """Copy every table aside once. Returns the SQL that puts the copy back."""
         ident = pgsql.Identifier
         try:
@@ -459,7 +485,7 @@ class Explorer:
         sequences = await (await self.db.execute(SEQUENCES, (self.s.schema,))).fetchall()
         await self.db.execute(pgsql.SQL("DROP SCHEMA IF EXISTS {} CASCADE").format(ident(SNAPSHOT)))
         await self.db.execute(pgsql.SQL("CREATE SCHEMA {}").format(ident(SNAPSHOT)))
-        steps = [pgsql.SQL("SET LOCAL session_replication_role = replica")]
+        steps: list[pgsql.Composable] = [pgsql.SQL("SET LOCAL session_replication_role = replica")]
         if tables:
             steps.append(pgsql.SQL("TRUNCATE {}").format(pgsql.SQL(", ").join(ident(self.s.schema, t) for t, _ in tables)))
         for table, columns in tables:
@@ -469,38 +495,40 @@ class Explorer:
             steps.append(pgsql.SQL("INSERT INTO {} ({}) OVERRIDING SYSTEM VALUE SELECT {} FROM {}").format(real, cols, cols, copy))
         for (name,) in sequences:
             seq = ident(self.s.schema, name)
-            last, called = await (await self.db.execute(pgsql.SQL("SELECT last_value, is_called FROM {}").format(seq))).fetchone()
+            [(last, called)] = await (await self.db.execute(pgsql.SQL("SELECT last_value, is_called FROM {}").format(seq))).fetchall()
             steps.append(pgsql.SQL("SELECT setval({}, {}, {})").format(pgsql.Literal(seq.as_string(self.db)), pgsql.Literal(last), pgsql.Literal(called)))
         return pgsql.SQL("; ").join(steps)
 
-    async def catalog(self):
+    async def catalog(self) -> tuple[set[str], set[str], dict[str, set[str]], dict[str, set[str]]]:
         """Table names, names that hide what they touch, and foreign keys both ways."""
         found = await (await self.db.execute(NAMES)).fetchall()
         opaque = {name.lower() for kind, name in found if kind == "opaque"}
         names = {name.lower() for kind, name in found if kind == "table"}
-        parents, children = {}, {}
+        parents: dict[str, set[str]] = {}
+        children: dict[str, set[str]] = {}
         for child, parent in await (await self.db.execute(LINKS)).fetchall():
             parents.setdefault(child.lower(), set()).add(parent.lower())
             children.setdefault(parent.lower(), set()).add(child.lower())
         return names, opaque, parents, children
 
-    async def snapshot(self):
-        out = {}
+    async def snapshot(self) -> Snapshot:
+        out: Snapshot = {}
         for table in self.tables:
             query = pgsql.SQL("SELECT * FROM {}").format(pgsql.Identifier(self.s.schema, table))
             cur = await self.db.execute(query)
-            out[table] = ([d.name for d in cur.description], await cur.fetchall())
+            out[table] = ([d.name for d in cur.description or []], await cur.fetchall())
         return out
 
-    async def check(self):
+    async def check(self) -> list[str]:
         return [q for q in self.s.invariants if not await self.fetch(q)]
 
-    async def fetch(self, query, params=None):
+    async def fetch(self, query: str, params: Sequence[Any] | None = None) -> Any:
         row = await (await self.db.execute(query, params)).fetchone()
         return row[0] if row else None
 
-    async def introspect(self):
-        tables, ignored = [], set()
+    async def introspect(self) -> tuple[list[str], set[Column], dict[Column, Column]]:
+        tables: list[str] = []
+        ignored: set[Column] = set()
         rows = await (await self.db.execute(COLUMNS, (self.s.schema,))).fetchall()
         for table, column, default, identity in rows:
             if table not in tables:
@@ -510,15 +538,15 @@ class Explorer:
         keys = await (await self.db.execute(FOREIGN_KEYS, (self.s.schema,))).fetchall()
         return tables, ignored, {(t, c): (rt, rc) for t, c, rt, rc in keys}
 
-    async def send(self, req):
+    async def send(self, req: Request) -> tuple[int, bytes, http.client.HTTPMessage | None]:
         return await asyncio.to_thread(self._http, req)
 
-    async def ask(self, req):
+    async def ask(self, req: Request) -> tuple[int, str | None]:
         """Send a request. Returns its status, and its body when bodies are compared."""
         status, body, _ = await self.send(req)
         return status, body.decode("utf-8", "replace") if self.s.bodies else None
 
-    def _http(self, req):
+    def _http(self, req: Request) -> tuple[int, bytes, http.client.HTTPMessage | None]:
         data = None if req.json is None else json.dumps(req.json).encode()
         headers = {"content-type": "application/json", **req.headers} if data else req.headers
         r = urllib.request.Request(self.s.app + req.path, data=data, method=req.method, headers=headers)
@@ -533,10 +561,16 @@ class Explorer:
             return 0, b"", None
 
 
-def judge(outcome, serials, ignored, fks=None, loose=None):
+def judge(
+    outcome: Outcome,
+    serials: list[Outcome],
+    ignored: set[Column],
+    fks: dict[Column, Column] | None = None,
+    loose: dict[str, set[BodyPath]] | None = None,
+) -> list[str]:
     """Why this outcome is impossible in any serial order. Empty if it is possible."""
 
-    def answers(o):
+    def answers(o: Outcome) -> dict[str, tuple[int, frozenset[tuple[BodyPath, str]] | None]]:
         return {role: (status, body_key(o.bodies.get(role), (loose or {}).get(role, ()))) for role, status in o.statuses.items()}
 
     mine, theirs = answers(outcome), [answers(s) for s in serials]
@@ -563,15 +597,15 @@ def judge(outcome, serials, ignored, fks=None, loose=None):
     return reasons
 
 
-def flat(body):
+def flat(body: str) -> dict[BodyPath, Any]:
     """A response body as {path: value}. A body that is not JSON is one value."""
     try:
         root = json.loads(body)
     except ValueError:
         return {(): body}
-    out = {}
+    out: dict[BodyPath, Any] = {}
 
-    def walk(node, path):
+    def walk(node: Any, path: BodyPath) -> None:
         if isinstance(node, (dict, list)) and node:
             for key, value in node.items() if isinstance(node, dict) else enumerate(node):
                 walk(value, path + (key,))
@@ -582,7 +616,7 @@ def flat(body):
     return out
 
 
-def differing(first, again):
+def differing(first: str | None, again: str | None) -> set[BodyPath]:
     """Paths whose values differ between the bodies of two identical runs."""
     if first is None or again is None:
         return set()
@@ -590,7 +624,7 @@ def differing(first, again):
     return {path for path in a.keys() | b.keys() if a.get(path, MISSING) != b.get(path, MISSING)}
 
 
-def body_key(body, loose):
+def body_key(body: str | None, loose: Collection[BodyPath]) -> frozenset[tuple[BodyPath, str]] | None:
     """What is left of a body to compare: no ids, tokens or timestamps, and no field that changes on its own."""
     if body is None:
         return None
@@ -602,11 +636,11 @@ def body_key(body, loose):
     return frozenset(kept)
 
 
-def captured(source, body, headers, who):
+def captured(source: str, body: bytes, headers: http.client.HTTPMessage | None, who: str) -> str:
     """What a login hands on: a field of its JSON body, or a response header named after 'header:'."""
     if source.lower().startswith("header:"):
         name = source[7:].strip()
-        values = headers.get_all(name) or []
+        values = (headers.get_all(name) if headers else None) or []
         if not values:
             raise RunError(f"login {who}: the response has no {name} header")
         # a Set-Cookie value carries attributes after its first part, which a Cookie header must not repeat
@@ -620,7 +654,7 @@ def captured(source, body, headers, who):
     return str(node)
 
 
-def fill(node, values):
+def fill(node: Any, values: dict[str, str]) -> Any:
     """Put captured login values into every ${login.name} of a path, headers or a JSON body."""
     if isinstance(node, str):
         return REF.sub(lambda m: values[f"{m[1]}.{m[2]}"], node)
@@ -631,19 +665,19 @@ def fill(node, values):
     return node
 
 
-def shape(sql):
+def shape(sql: str) -> str:
     """The statement with its literals blanked."""
     return LITERAL.sub("?", sql)
 
 
-def holds(trace):
+def holds(trace: list[str]) -> list[Hold]:
     """The statements to hold A before, leaving out holds that repeat a serial order.
 
     While A has only opened a transaction, letting B run is B then A. Once A
     has nothing left but handing its connection back, it is A then B.
     """
-    seen = Counter()
-    points = []
+    seen: Counter[str] = Counter()
+    points: list[Hold] = []
     for i, sql in enumerate(trace):
         seen[sql] += 1
         started = any(not CONTROL.match(s) for s in trace[:i])
@@ -653,12 +687,13 @@ def holds(trace):
     return points
 
 
-def footprint(trace, names, opaque, parents, children, changed):
+def footprint(trace: list[str], names: set[str], opaque: set[str], parents: dict[str, set[str]], children: dict[str, set[str]], changed: set[str]) -> Footprint:
     """The tables a request touched and the ones it wrote, or None when its SQL cannot tell.
 
     Every doubt widens the answer, so a pair is only ever skipped when it is safe.
     """
-    touched, written, roots = set(changed), set(changed), set()
+    touched, written = set(changed), set(changed)
+    roots: set[str] = set()
     for sql in trace:
         words = set(re.findall(r"\w+", sql.lower()))
         if words & opaque:
@@ -686,16 +721,16 @@ def footprint(trace, names, opaque, parents, children, changed):
     return touched, written
 
 
-def independent(a, b):
+def independent(a: Footprint, b: Footprint) -> bool:
     """True when neither request writes a table the other touches, so no order can matter."""
     return a is not None and b is not None and not (a[1] & b[0]) and not (b[1] & a[0])
 
 
-def rows(table):
+def rows(table: Table) -> Counter[str]:
     return Counter(map(str, table[1]))
 
 
-def normalize(snapshot, ignored, fks=None):
+def normalize(snapshot: Snapshot, ignored: set[Column], fks: dict[Column, Column] | None = None) -> dict[str, Counter[tuple[str, ...]]]:
     """Each table as a multiset of rows, without the ignored columns.
 
     A reference to a generated id becomes the row it points to, so two runs
@@ -706,17 +741,17 @@ def normalize(snapshot, ignored, fks=None):
         for col, target in (fks or {}).items()
         if target in ignored and target[0] in snapshot and target[1] in snapshot[target[0]][0]
     }
-    index = {}
+    index: dict[Column, dict[Any, tuple[Any, ...]]] = {}
 
-    def pointed(target, value):
+    def pointed(target: Column, value: Any) -> tuple[Any, ...] | None:
         if target not in index:
             cols, rows = snapshot[target[0]]
             i = cols.index(target[1])
             index[target] = {r[i]: r for r in rows}
         return index[target].get(value)
 
-    def label(table, row, depth=0):
-        out = []
+    def label(table: str, row: tuple[Any, ...], depth: int = 0) -> tuple[str, ...]:
+        out: list[str] = []
         for col, value in zip(snapshot[table][0], row, strict=True):
             if (table, col) in ignored:
                 continue
@@ -730,9 +765,9 @@ def normalize(snapshot, ignored, fks=None):
     return {table: Counter(label(table, row) for row in rows) for table, (_, rows) in snapshot.items()}
 
 
-def unstable(first, again):
+def unstable(first: Snapshot, again: Snapshot) -> set[Column]:
     """Columns whose values differ between two identical runs."""
-    out = set()
+    out: set[Column] = set()
     for table, (cols, rows) in first.items():
         other = again[table][1]
         for i, col in enumerate(cols):

@@ -4,6 +4,7 @@ import json
 import re
 import urllib.request
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import yaml
@@ -38,7 +39,7 @@ class InitError(Exception):
     pass
 
 
-def load_spec(source):
+def load_spec(source: str) -> dict[str, Any]:
     if source.startswith(("http://", "https://")):
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         with opener.open(source, timeout=10) as resp:
@@ -57,7 +58,7 @@ def load_spec(source):
     return spec
 
 
-def default_app(spec, source):
+def default_app(spec: dict[str, Any], source: str) -> str:
     if source.startswith(("http://", "https://")):
         u = urlsplit(source)
         return f"{u.scheme}://{u.netloc}"
@@ -67,9 +68,10 @@ def default_app(spec, source):
     return "http://127.0.0.1:8000"
 
 
-def scenario(spec, source, app, out):
+def scenario(spec: dict[str, Any], source: str, app: str, out: str) -> tuple[str, int]:
     """The scenario file as text, and how many requests it has."""
-    blocks, names = [], set()
+    blocks: list[str] = []
+    names: set[str] = set()
     for path, item in (spec.get("paths") or {}).items():
         item = resolve(item, spec)
         for method in WRITES:
@@ -95,13 +97,13 @@ def scenario(spec, source, app, out):
     return head + "\n" + "\n\n".join(blocks) + "\n", len(blocks)
 
 
-def label(op, method, path):
+def label(op: dict[str, Any], method: str, path: str) -> str:
     if op.get("summary"):
         return str(op["summary"]).lower()
     return str(op.get("operationId") or f"{method} {path}")
 
 
-def unique(name, names):
+def unique(name: str, names: set[str]) -> str:
     candidate, n = name, 2
     while candidate in names:
         candidate, n = f"{name} {n}", n + 1
@@ -109,14 +111,14 @@ def unique(name, names):
     return candidate
 
 
-def fill(path, params, spec):
-    by_name = {}
+def fill(path: str, params: list[Any], spec: dict[str, Any]) -> str:
+    by_name: dict[Any, dict[str, Any]] = {}
     for p in params:
         p = resolve(p, spec)
         if isinstance(p, dict) and p.get("in") == "path":
             by_name[p.get("name")] = p
 
-    def value(m):
+    def value(m: re.Match[str]) -> str:
         p = by_name.get(m[1], {})
         v = p.get("example")
         if v is None:
@@ -126,7 +128,7 @@ def fill(path, params, spec):
     return PARAM.sub(value, path)
 
 
-def body_schema(op, spec):
+def body_schema(op: dict[str, Any], spec: dict[str, Any]) -> Any:
     body = resolve(op.get("requestBody"), spec)
     if not isinstance(body, dict):
         return None
@@ -135,7 +137,7 @@ def body_schema(op, spec):
     return (media or {}).get("schema")
 
 
-def resolve(node, spec, depth=0):
+def resolve(node: Any, spec: dict[str, Any], depth: int = 0) -> Any:
     while isinstance(node, dict) and "$ref" in node and depth < 20:
         target = spec
         for part in str(node["$ref"]).lstrip("#/").split("/"):
@@ -144,7 +146,7 @@ def resolve(node, spec, depth=0):
     return node
 
 
-def example(schema, spec, depth=0):
+def example(schema: Any, spec: dict[str, Any], depth: int = 0) -> Any:
     """A plausible value for a JSON schema, preferring the spec's own examples."""
     schema = resolve(schema, spec)
     if not isinstance(schema, dict) or depth > 5:
@@ -155,7 +157,7 @@ def example(schema, spec, depth=0):
     if schema.get("enum"):
         return schema["enum"][0]
     if schema.get("allOf"):
-        merged = {}
+        merged: dict[str, Any] = {}
         for part in schema["allOf"]:
             value = example(part, spec, depth + 1)
             if isinstance(value, dict):
@@ -169,7 +171,7 @@ def example(schema, spec, depth=0):
     if isinstance(kind, list):
         kind = next((k for k in kind if k != "null"), None)
     if kind == "object" or "properties" in schema:
-        out = {}
+        out: dict[str, Any] = {}
         for key, sub in (schema.get("properties") or {}).items():
             value = example(sub, spec, depth + 1)
             if value is not None:
@@ -185,11 +187,11 @@ def example(schema, spec, depth=0):
     if kind == "boolean":
         return True
     if kind == "string":
-        return FORMATS.get(schema.get("format"), "text")
+        return FORMATS.get(str(schema.get("format")), "text")
     return None
 
 
-def toml_value(value):
+def toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -203,6 +205,6 @@ def toml_value(value):
     return json.dumps(str(value), ensure_ascii=False)
 
 
-def toml_key(key):
+def toml_key(key: object) -> str:
     key = str(key)  # YAML allows keys that are numbers
     return key if BARE_KEY.match(key) else json.dumps(key, ensure_ascii=False)

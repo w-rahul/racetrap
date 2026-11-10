@@ -4,6 +4,8 @@ import asyncio
 import itertools
 import logging
 import ssl
+from collections.abc import Mapping
+from typing import Any
 
 from . import wire
 
@@ -17,49 +19,50 @@ BUFFERED = {b"P", b"B", b"D", b"E", b"C"}
 class Conn:
     """One client connection through the proxy."""
 
-    def __init__(self, cid):
+    def __init__(self, cid: int) -> None:
         self.id = cid
-        self.pid = None
+        self.pid: int | None = None
         self.session = wire.Session()
 
 
 class Hooks:
     """What the proxy reports. The default does nothing and never holds."""
 
-    def opened(self, conn):
+    def opened(self, conn: Conn) -> None:
         pass
 
-    def closed(self, conn):
+    def closed(self, conn: Conn) -> None:
         pass
 
-    async def before(self, conn, sqls):
+    async def before(self, conn: Conn, sqls: list[str]) -> None:
         pass
 
-    def done(self, conn, tag=None, error=None):
+    def done(self, conn: Conn, tag: str | None = None, error: dict[str, str] | None = None) -> None:
         pass
 
 
 class Proxy:
-    def __init__(self, listen, upstream, hooks, tls=None):
+    def __init__(self, listen: tuple[str, int], upstream: tuple[str, int], hooks: Hooks, tls: tuple[ssl.SSLContext, bool] | None = None) -> None:
         self.listen = listen
         self.upstream = upstream
         self.hooks = hooks
         self.tls = tls
         self.ids = itertools.count(1)
-        self.tasks = set()
+        self.tasks: set[asyncio.Task[Any]] = set()
 
-    async def start(self):
+    async def start(self) -> None:
         self.server = await asyncio.start_server(self._accept, *self.listen)
 
-    async def close(self):
+    async def close(self) -> None:
         self.server.close()
         for task in self.tasks:
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         await self.server.wait_closed()
 
-    async def _accept(self, creader, cwriter):
+    async def _accept(self, creader: asyncio.StreamReader, cwriter: asyncio.StreamWriter) -> None:
         task = asyncio.current_task()
+        assert task is not None  # asyncio runs this callback as a task
         self.tasks.add(task)
         try:
             await self._serve(creader, cwriter)
@@ -71,7 +74,7 @@ class Proxy:
             self.tasks.discard(task)
             cwriter.close()
 
-    async def _serve(self, creader, cwriter):
+    async def _serve(self, creader: asyncio.StreamReader, cwriter: asyncio.StreamWriter) -> None:
         code, raw = await wire.read_startup(creader)
         while code in (wire.SSL_REQUEST, wire.GSSENC_REQUEST):
             # The app side is plain TCP. Clients on sslmode=prefer retry without TLS.
@@ -82,7 +85,7 @@ class Proxy:
         ureader, uwriter = await asyncio.open_connection(*self.upstream, happy_eyeballs_delay=0.25)
         try:
             if self.tls:
-                await self._encrypt(ureader, uwriter)
+                await self._encrypt(ureader, uwriter, *self.tls)
             uwriter.write(raw)
             if code == wire.CANCEL_REQUEST:
                 await uwriter.drain()
@@ -103,16 +106,16 @@ class Proxy:
         finally:
             uwriter.close()
 
-    async def _encrypt(self, ureader, uwriter):
-        context, required = self.tls
+    async def _encrypt(self, ureader: asyncio.StreamReader, uwriter: asyncio.StreamWriter, context: ssl.SSLContext, required: bool) -> None:
         uwriter.write(wire.SSL_REQUEST_PACKET)
         if await ureader.readexactly(1) == b"S":
             await uwriter.start_tls(context, server_hostname=self.upstream[0])
         elif required:
             raise ssl.SSLError("the server does not offer TLS, but sslmode asks for it")
 
-    async def _upstream(self, conn, creader, uwriter):
-        held, sqls = [], []
+    async def _upstream(self, conn: Conn, creader: asyncio.StreamReader, uwriter: asyncio.StreamWriter) -> None:
+        held: list[bytes] = []
+        sqls: list[str] = []
         while True:
             kind, body, raw = await wire.read_message(creader)
             sql = conn.session.feed(kind, body)
@@ -130,7 +133,7 @@ class Proxy:
             if kind == b"X":
                 return
 
-    async def _downstream(self, conn, ureader, cwriter):
+    async def _downstream(self, conn: Conn, ureader: asyncio.StreamReader, cwriter: asyncio.StreamWriter) -> None:
         rows = 0
         while True:
             kind, body, raw = await wire.read_message(ureader)
@@ -153,7 +156,7 @@ class Proxy:
             await cwriter.drain()
 
 
-def tls_context(params):
+def tls_context(params: Mapping[str, Any]) -> tuple[ssl.SSLContext, bool] | None:
     """Read sslmode the way libpq does. Returns (context, required), or None for plain TCP."""
     mode = params.get("sslmode", "prefer")
     if mode == "disable":

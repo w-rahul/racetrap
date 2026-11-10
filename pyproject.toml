@@ -50,6 +50,13 @@ dev = [
     "types-pyyaml>=6.0.12.20261103",
 ]
 
+[tool.mypy]
+files = ["src/racetrap"]
+python_version = "3.11"
+strict = true
+# database rows and JSON bodies have no fixed shape
+warn_return_any = false
+
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 # the report keeps its CSS one rule per line, so long lines are fine

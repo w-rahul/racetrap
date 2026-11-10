@@ -3,11 +3,16 @@
 import html
 import json
 import re
+from collections import Counter
 from datetime import datetime
+from typing import Any
 from xml.etree import ElementTree
 
 from . import __version__
-from .explore import POOL_RESET, normalize, shape
+from .explore import POOL_RESET, Event, Pair, Result, Schedule, normalize, shape
+from .scenario import Column, Scenario
+
+Fks = dict[Column, Column]
 
 LOCKING_READ = re.compile(r"\bFOR\s+(NO\s+KEY\s+UPDATE|UPDATE|SHARE|KEY\s+SHARE)\b", re.I)
 VERB = re.compile(r"\s*([A-Za-z]+)")
@@ -15,7 +20,7 @@ COUNTED = re.compile(r"^(?:SELECT|UPDATE|DELETE|INSERT \d+|MERGE|COPY|FETCH|MOVE
 ROWS = re.compile(r"^\d+ rows?$")
 
 
-def render(scenario, result):
+def render(scenario: Scenario, result: Result) -> str:
     racing = [p for p in result.pairs if p.races]
     calm = [p for p in result.pairs if not p.races]
     # B vs A tells the same story as A vs B, so it becomes a note on that card
@@ -63,13 +68,13 @@ def render(scenario, result):
     return PAGE.replace("{body}", "\n".join(parts))
 
 
-def passed(pair):
+def passed(pair: Pair) -> str:
     if pair.skipped:
         return "skipped, the two share no table that either one writes"
     return f"{len(pair.schedules)} orders, all serializable"
 
 
-def summary(scenario, result):
+def summary(scenario: Scenario, result: Result) -> dict[str, Any]:
     """The result as plain data, for --json."""
     return {
         "racetrap": __version__,
@@ -97,7 +102,7 @@ def summary(scenario, result):
     }
 
 
-def explain(pair):
+def explain(pair: Pair) -> str:
     """Why a pair races, as plain text."""
     return "\n".join(
         f"{pair.a.name} was held before its {short(r.hold[0])}{f' (time {r.hold[1]})' if r.hold[1] > 1 else ''} while {pair.b.name} ran: "
@@ -106,7 +111,7 @@ def explain(pair):
     )
 
 
-def junit(scenario, result):
+def junit(scenario: Scenario, result: Result) -> str:
     """The result as JUnit XML, one test case per pair."""
     racing = sum(bool(p.races) for p in result.pairs)
     skipped = sum(p.skipped for p in result.pairs)
@@ -123,12 +128,12 @@ def junit(scenario, result):
     return ElementTree.tostring(suite, encoding="unicode", xml_declaration=True) + "\n"
 
 
-def names(pair):
+def names(pair: Pair) -> tuple[str, str]:
     a, b = pair.a.name, pair.b.name
     return a, (f"{b} again" if pair.a is pair.b else b)
 
 
-def race_card(pair, fks, mirrored):
+def race_card(pair: Pair, fks: Fks, mirrored: bool) -> str:
     race = pair.races[0]
     a, b = names(pair)
     sql, _ = race.hold
@@ -154,9 +159,12 @@ def race_card(pair, fks, mirrored):
     ])
 
 
-def lanes(events, held, a, b):
+def lanes(events: list[Event], held: str, a: str, b: str) -> str:
     """A and B as two tracks, each statement a chip in the order Postgres saw it."""
-    steps, by_conn, gate, released = [], {}, None, None
+    steps: list[dict[str, Any]] = []
+    by_conn: dict[int, dict[str, Any]] = {}
+    gate: int | None = None
+    released: int | None = None
     for e in events:
         if e.who == "bg":
             continue
@@ -164,7 +172,7 @@ def lanes(events, held, a, b):
             if e.conn in by_conn:
                 by_conn[e.conn]["results"].append(e)
             continue
-        step = {"who": e.who, "kind": e.kind, "text": e.text, "results": []}
+        step: dict[str, Any] = {"who": e.who, "kind": e.kind, "text": e.text, "results": []}
         if e.kind == "hold":
             gate = len(steps)
         else:
@@ -203,7 +211,7 @@ def lanes(events, held, a, b):
     )
 
 
-def rows_label(results):
+def rows_label(results: list[Event]) -> str:
     """'1 row' from a CommandComplete tag. BEGIN and COMMIT say nothing new."""
     tag = results[0].text if results else ""
     counted = COUNTED.match(tag)
@@ -214,11 +222,11 @@ def rows_label(results):
     return f"{n} row" + ("" if n == 1 else "s")
 
 
-def outcome(pair, race, fks):
+def outcome(pair: Pair, race: Schedule, fks: Fks) -> str:
     ab, ba = pair.serials
     forced = normalize(race.outcome.snapshot, pair.ignored, fks)
     serial = [normalize(s.snapshot, pair.ignored, fks) for s in pair.serials]
-    rows = [
+    rows: list[tuple[str, str | int, str | int, str | int, bool | None]] = [
         (f"A {esc(pair.a.name)}", status(ab.statuses["A"]), status(ba.statuses["A"]), status(race.outcome.statuses["A"]), None),
         (f"B {esc(names(pair)[1])}", status(ab.statuses["B"]), status(ba.statuses["B"]), status(race.outcome.statuses["B"]), None),
     ]
@@ -238,7 +246,7 @@ def outcome(pair, race, fks):
     )
 
 
-def bodies(pair, race):
+def bodies(pair: Pair, race: Schedule) -> str:
     """What each request answered in each order, side by side."""
     orders = [("A then B", pair.serials[0], ""), ("B then A", pair.serials[1], ""), ("racetrap's order", race.outcome, " bad")]
     if not any(o.bodies.get(role) for _, o, _ in orders for role in "AB"):
@@ -250,7 +258,7 @@ def bodies(pair, race):
     return "<details><summary>Response bodies in each order</summary>" + "".join(out) + "</details>"
 
 
-def pretty(body, limit=600):
+def pretty(body: str | None, limit: int = 600) -> str:
     """A body laid out for reading, cut to a sane length."""
     if not body:
         return ""
@@ -261,7 +269,7 @@ def pretty(body, limit=600):
     return body if len(body) <= limit else body[:limit] + "\n…"
 
 
-def data_diff(pair, schedule, fks, a, b):
+def data_diff(pair: Pair, schedule: Schedule, fks: Fks, a: str, b: str) -> str:
     ignored = pair.ignored
     forced = normalize(schedule.outcome.snapshot, ignored, fks)
     serial = [normalize(s.snapshot, ignored, fks) for s in pair.serials]
@@ -276,7 +284,7 @@ def data_diff(pair, schedule, fks, a, b):
     return "".join(out)
 
 
-def rows_table(cols, rows, limit=8):
+def rows_table(cols: list[str], rows: Counter[tuple[str, ...]], limit: int = 8) -> str:
     items = sorted(rows.elements())
     head = "".join(f"<th>{esc(c)}</th>" for c in cols)
     body = "".join("<tr>" + "".join(f"<td>{esc(v)}</td>" for v in row) + "</tr>" for row in items[:limit])
@@ -286,8 +294,10 @@ def rows_table(cols, rows, limit=8):
     return f'<table class="rows"><tr>{head}</tr>{body}</table>{more}'
 
 
-def timeline(events, held, a, b):
-    rows, open_rows, waiting = [], {}, False
+def timeline(events: list[Event], held: str, a: str, b: str) -> str:
+    rows: list[dict[str, Any]] = []
+    open_rows: dict[int, dict[str, Any]] = {}
+    waiting = False
     for e in (e for e in events if e.who != "bg"):
         if e.kind in ("ok", "error") and e.conn in open_rows:
             row = open_rows[e.conn]
@@ -319,7 +329,7 @@ def timeline(events, held, a, b):
     )
 
 
-def cell_html(row):
+def cell_html(row: dict[str, Any]) -> str:
     if row["kind"] == "hold":
         return f'<span class="flag">held before</span><code>{esc(short(row["text"]))}</code>'
     label = '<span class="flag">released</span>' if row["released"] else ""
@@ -331,7 +341,7 @@ def cell_html(row):
     return label + code + (f'<span class="res{late}">{results}</span>' if results else "")
 
 
-def fix(pair, schedule, a, b):
+def fix(pair: Pair, schedule: Schedule, a: str, b: str) -> str:
     sql, n = schedule.hold
     seen, cut = 0, len(pair.trace)
     for i, s in enumerate(pair.trace):
@@ -362,16 +372,16 @@ def fix(pair, schedule, a, b):
     )
 
 
-def status(code):
+def status(code: int) -> str:
     return "none" if code == 0 else esc(code)
 
 
-def short(sql, limit=110):
+def short(sql: str, limit: int = 110) -> str:
     flat = " ".join(sql.split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
-def esc(value):
+def esc(value: object) -> str:
     return html.escape(str(value))
 
 
