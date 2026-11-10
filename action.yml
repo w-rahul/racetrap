@@ -13,8 +13,11 @@ inputs:
     description: Where to write the HTML report.
     default: racetrap-report.html
   package:
-    description: What to install, like racetrap or racetrap==0.4.0.
+    description: What to install, like racetrap or racetrap==0.5.0.
     default: racetrap
+  args:
+    description: Extra command line options, like --workers 4 or --junit results.xml.
+    default: ""
   upload-report:
     description: Upload the report as a workflow artifact.
     default: "true"
@@ -36,9 +39,11 @@ runs:
       env:
         SCENARIO: ${{ inputs.scenario }}
         REPORT: ${{ inputs.report }}
-      # call it by path so the app keeps the job's own python and packages
+        ARGS: ${{ inputs.args }}
+      # call it by path so the app keeps the job's own python and packages.
+      # ARGS is left unquoted on purpose, so the shell splits it into options.
       run: |
-        "$(uv tool dir --bin)/racetrap" "$SCENARIO" --report "$REPORT"
+        "$(uv tool dir --bin)/racetrap" "$SCENARIO" --report "$REPORT" $ARGS
     - name: Upload the report
       if: always() && inputs.upload-report == 'true'
       uses: actions/upload-artifact@v7

@@ -45,7 +45,7 @@ There is nothing to reset by hand. racetrap saves your tables before it starts, 
 
 ```
 $ racetrap examples/tickets/buggy.toml
-racetrap 0.4.0
+racetrap 0.5.0
 proxy  127.0.0.1:6499 -> localhost:5432
 app    http://127.0.0.1:8765
 
@@ -186,12 +186,18 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: pip install -r requirements.txt
-      - uses: w-rahul/racetrap@v0.4.0
+      - uses: w-rahul/racetrap@v0.5.0
         with:
           scenario: racetrap.toml
 ```
 
-The job fails when any pair races, and the HTML report is uploaded as an artifact. Install your app's own dependencies before the racetrap step, so `command` can start it. Outside the action, `racetrap racetrap.toml --json results.json` writes the results for scripts.
+The job fails when any pair races, and the HTML report is uploaded as an artifact. Install your app's own dependencies before the racetrap step, so `command` can start it. The `args` input passes command line options to racetrap.
+
+## Faster runs, pytest and other outputs
+
+- `racetrap racetrap.toml --workers 4` runs four pairs at a time. Each worker gets its own copy of the database and of the app. On the ticket example with six users, 36 pairs took 40.8 s with one worker and 14.4 s with four, on one Windows machine, with the same verdicts.
+- `pytest racetrap.toml` runs a scenario as pytest tests, one test per pair. The plugin comes with racetrap, and it only runs scenario files you name.
+- `--json results.json` writes the results for scripts, and `--junit results.xml` writes them for CI test reports.
 
 ## How it decides
 
@@ -210,7 +216,9 @@ Values the database fills in differ between correct runs, so ids, timestamps and
 
 Your app can be in any language. racetrap speaks the Postgres protocol and never looks at the client. node-postgres was checked by hand, and other drivers are not in CI yet.
 
-Two things are not supported yet. The proxy speaks plain TCP on both sides, so the app must not require TLS to reach it, and the test database must accept connections without TLS. A connection pooler such as PgBouncer between racetrap and Postgres is untested.
+A test database that requires TLS works. racetrap reads `sslmode` and `sslrootcert` from the database URL the way libpq does, and opens TLS to the server itself. The app still talks to the proxy in plain TCP on the same machine, so racetrap hands it the URL with `sslmode=disable`.
+
+Not supported yet: client certificates for the database connection. A connection pooler such as PgBouncer between racetrap and Postgres is untested.
 
 ## Research behind it
 

@@ -13,6 +13,7 @@ requests share no table that either one writes.
 
 import asyncio
 import http.client
+import itertools
 import json
 import re
 import time
@@ -244,13 +245,14 @@ class Recorder(Hooks):
 
 
 class Explorer:
-    def __init__(self, scenario, db, recorder, progress=None, alive=None, all_pairs=False):
+    def __init__(self, scenario, db, recorder, progress=None, alive=None, all_pairs=False, share=(0, 1)):
         self.s = scenario
         self.db = db
         self.rec = recorder
         self.progress = progress or (lambda pair: None)
         self.alive = alive or (lambda: True)
         self.all_pairs = all_pairs
+        self.share = share
         self.restore = None
         self.loose = {}
         self.runs = 0
@@ -319,13 +321,15 @@ class Explorer:
             host, port = self.s.proxy
             raise RunError(f"no request sent SQL through the proxy. Point the app's database at {host}:{port}")
         pairs = []
-        for a in self.s.requests:
-            for b in self.s.requests:
-                if not self.all_pairs and independent(feet[a.name], feet[b.name]):
-                    pairs.append(Pair(a, b, traces[a.name], [], set(), skipped=True))
-                else:
-                    pairs.append(await self.pair(a, b, traces[a.name]))
-                self.progress(pairs[-1])
+        worker, workers = self.share
+        for k, (a, b) in enumerate(itertools.product(self.s.requests, repeat=2)):
+            if k % workers != worker:
+                continue
+            if not self.all_pairs and independent(feet[a.name], feet[b.name]):
+                pairs.append(Pair(a, b, traces[a.name], [], set(), skipped=True))
+            else:
+                pairs.append(await self.pair(a, b, traces[a.name]))
+            self.progress(pairs[-1])
         ignored = self.ignored.union(*(p.ignored for p in pairs))
         return Result(pairs, ignored, self.fks, self.runs, time.perf_counter() - start, self.warnings)
 

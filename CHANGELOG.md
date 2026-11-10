@@ -2,6 +2,20 @@
 
 Notable changes to racetrap. Versions follow [semantic versioning](https://semver.org).
 
+## 0.5.0 (2026-11-10)
+
+### Added
+
+- TLS to the database. racetrap reads `sslmode` and `sslrootcert` from the database URL the way libpq does, so a test database that requires TLS works.
+- `--workers N` runs pairs in parallel. Each worker gets its own copy of the database and of the app. Four workers ran a 36 pair scenario 2.8 times faster.
+- A pytest plugin. `pytest racetrap.toml` runs a scenario as one test per pair.
+- `--junit PATH` writes the results as JUnit XML.
+- The GitHub Action takes `args`, for extra command line options.
+
+### Changed
+
+- When the database URL sets `sslmode`, the URL racetrap hands to the app has `sslmode=disable`, because the app talks to the proxy in plain TCP.
+
 ## 0.4.0 (2026-11-10)
 
 ### Added

@@ -1,8 +1,13 @@
 import argparse
 import asyncio
+import contextlib
+import copy
+import dataclasses
 import http.client
+import itertools
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -11,15 +16,18 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from functools import partial
 from pathlib import Path
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import psycopg
+from psycopg import sql as pgsql
 from psycopg.conninfo import conninfo_to_dict
 
 from . import __version__, openapi
-from .explore import Explorer, Recorder, RunError
-from .proxy import Proxy
-from .report import render, summary
+from .explore import Explorer, Recorder, Result, RunError
+from .proxy import Proxy, tls_context
+from .report import junit, render, summary
 from .scenario import ScenarioError, load
 
 
@@ -35,7 +43,9 @@ def main(argv=None):
     parser.add_argument("scenario", help="scenario file in TOML")
     parser.add_argument("--report", default="racetrap-report.html", help="HTML report path (default: %(default)s)")
     parser.add_argument("--json", metavar="PATH", help="also write the results as JSON to this file")
+    parser.add_argument("--junit", metavar="PATH", help="also write the results as JUnit XML to this file")
     parser.add_argument("--all-pairs", action="store_true", help="test every pair, even two requests that share no tables")
+    parser.add_argument("--workers", type=int, default=1, metavar="N", help="run pairs in parallel, each worker with its own copy of the database and the app")
     parser.add_argument("--version", action="version", version=f"racetrap {__version__}")
     args = parser.parse_args(argv)
     try:
@@ -43,8 +53,11 @@ def main(argv=None):
         host, port = scenario.upstream
         print(f"racetrap {__version__}")
         print(f"proxy  {scenario.proxy[0]}:{scenario.proxy[1]} -> {host}:{port}")
-        print(f"app    {scenario.app}\n")
-        result = run_async(run(scenario, printer(scenario), args.all_pairs))
+        print(f"app    {scenario.app}")
+        if args.workers > 1:
+            print(f"workers {args.workers}")
+        print()
+        result = run_async(run(scenario, printer(scenario), args.all_pairs, args.workers))
     except (ScenarioError, RunError, psycopg.Error, OSError) as e:
         print(f"racetrap: {e}", file=sys.stderr)
         return 2
@@ -59,6 +72,8 @@ def main(argv=None):
     outputs = [("Report", args.report, lambda: render(scenario, result))]
     if args.json:
         outputs.append(("JSON", args.json, lambda: json.dumps(summary(scenario, result), indent=2) + "\n"))
+    if args.junit:
+        outputs.append(("JUnit", args.junit, lambda: junit(scenario, result)))
     for label, path, make in outputs:
         try:
             Path(path).write_text(make(), encoding="utf-8")
@@ -101,35 +116,124 @@ def printer(scenario):
     return show
 
 
-async def run(scenario, progress=None, all_pairs=False):
-    # libpq can hang on an address that drops packets, like ::1 on some Windows
-    # setups, so each address gets a deadline unless the URL sets its own
-    options = {} if "connect_timeout" in conninfo_to_dict(scenario.database) else {"connect_timeout": 5}
-    db = await psycopg.AsyncConnection.connect(scenario.database, autocommit=True, **options)
+async def run(scenario, progress=None, all_pairs=False, workers=1):
+    start = time.perf_counter()
+    db = await connect(scenario.database)
     try:
-        # a lock the app leaves behind should fail the run, not hang it
-        await db.execute("SET lock_timeout = '5s'")
         for q in scenario.init:
             await db.execute(q)
-        rec = Recorder()
-        proxy = Proxy(scenario.proxy, scenario.upstream, rec)
-        await proxy.start()
-        app = None
+        # more workers than pairs would only start apps that have nothing to do
+        workers = max(1, min(workers, len(scenario.requests) ** 2))
+        if workers == 1:
+            return await explore(scenario, db, progress, all_pairs)
+        ident, source = pgsql.Identifier, db.info.dbname
+        clones = [f"racetrap_{i}_{source}"[:63] for i in range(1, workers)]
+        drop = pgsql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)")
         try:
-            if scenario.command:
-                # an old app left on the port would be tested instead of this one
-                if await asyncio.to_thread(ping, scenario.app):
-                    raise RunError(f"something already answers at {scenario.app}. Stop it first, racetrap starts the app itself")
-                app = start_app(scenario)
-            await wait_ready(scenario.app, app)
-            alive = (lambda: app[0].poll() is None) if app else None
-            return await Explorer(scenario, db, rec, progress, alive, all_pairs).run()
+            for name in clones:
+                await db.execute(drop.format(ident(name)))
+                try:
+                    await db.execute(pgsql.SQL("CREATE DATABASE {} TEMPLATE {}").format(ident(name), ident(source)))
+                except psycopg.errors.ObjectInUse as e:
+                    raise RunError(f"--workers copies the database, and Postgres only allows that with every other connection to it closed. {e}") from None
+            jobs = [partial(worker, s, progress, all_pairs, (i, workers)) for i, s in enumerate(split(scenario, clones))]
+            return merge(await in_threads(jobs), start)
         finally:
-            if app:
-                stop_app(app)
-            await proxy.close()
+            for name in clones:
+                await db.execute(drop.format(ident(name)))
     finally:
         await db.close()
+
+
+async def connect(database):
+    # libpq can hang on an address that drops packets, like ::1 on some Windows
+    # setups, so each address gets a deadline unless the URL sets its own
+    options = {} if "connect_timeout" in conninfo_to_dict(database) else {"connect_timeout": 5}
+    db = await psycopg.AsyncConnection.connect(database, autocommit=True, **options)
+    # a lock the app leaves behind should fail the run, not hang it
+    await db.execute("SET lock_timeout = '5s'")
+    return db
+
+
+async def explore(scenario, db, progress, all_pairs, share=(0, 1)):
+    rec = Recorder()
+    proxy = Proxy(scenario.proxy, scenario.upstream, rec, tls_context(conninfo_to_dict(scenario.database)))
+    await proxy.start()
+    app = None
+    try:
+        if scenario.command:
+            # an old app left on the port would be tested instead of this one
+            if await asyncio.to_thread(ping, scenario.app):
+                raise RunError(f"something already answers at {scenario.app}. Stop it first, racetrap starts the app itself")
+            app = start_app(scenario, tell_port=share[1] > 1)
+        await wait_ready(scenario.app, app)
+        alive = (lambda: app[0].poll() is None) if app else None
+        return await Explorer(scenario, db, rec, progress, alive, all_pairs, share).run()
+    finally:
+        if app:
+            stop_app(app)
+        await proxy.close()
+
+
+async def worker(scenario, progress, all_pairs, share):
+    db = await connect(scenario.database)
+    try:
+        return await explore(scenario, db, progress, all_pairs, share)
+    finally:
+        await db.close()
+
+
+def split(scenario, clones):
+    """One scenario per worker. Each has its own database, proxy port and app port."""
+    app = urlsplit(scenario.app)
+    if not scenario.command or not app.port:
+        raise RunError("--workers needs command and a port in app, so racetrap can start one copy of the app per worker")
+    database = urlsplit(scenario.database)
+    scenarios = []
+    for i, clone in enumerate([None, *clones]):
+        port = str(app.port + i)
+        scenarios.append(
+            dataclasses.replace(
+                scenario,
+                # a login writes its tokens into the requests, and each worker logs in itself
+                requests=copy.deepcopy(scenario.requests),
+                app=urlunsplit(app._replace(netloc=f"{app.netloc.rpartition(':')[0]}:{port}")),
+                command=re.sub(rf"\b{app.port}\b", port, scenario.command),
+                proxy=(scenario.proxy[0], scenario.proxy[1] + i),
+                database=urlunsplit(database._replace(path="/" + quote(clone, safe=""))) if clone else scenario.database,
+            )
+        )
+    return scenarios
+
+
+async def in_threads(jobs):
+    """Run each job on its own thread and event loop, so no worker delays another's timers."""
+    live = []
+
+    def thread(job):
+        async def main():
+            live.append((asyncio.get_running_loop(), asyncio.current_task()))
+            return await job()
+
+        return run_async(main())
+
+    tasks = [asyncio.create_task(asyncio.to_thread(thread, job)) for job in jobs]
+    try:
+        return await asyncio.gather(*tasks)
+    finally:
+        # one failure, or Ctrl+C, stops the others, and each one cleans up after itself
+        for loop, task in live:
+            with contextlib.suppress(RuntimeError):  # that loop has already closed
+                loop.call_soon_threadsafe(task.cancel)
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def merge(results, start):
+    """What the workers found, with the pairs back in their usual order."""
+    pairs = [p for group in itertools.zip_longest(*(r.pairs for r in results)) for p in group if p is not None]
+    warnings = list(dict.fromkeys(w for r in results for w in r.warnings))
+    ignored = set().union(*(r.ignored for r in results))
+    return Result(pairs, ignored, results[0].fks, sum(r.runs for r in results), time.perf_counter() - start, warnings)
 
 
 def run_async(coro):
@@ -139,8 +243,11 @@ def run_async(coro):
         return runner.run(coro)
 
 
-def start_app(scenario):
+def start_app(scenario, tell_port=False):
     env = {**os.environ, scenario.database_env: scenario.proxied_database}
+    if tell_port:
+        # for apps that take their port from the environment and not from the command
+        env["PORT"] = str(urlsplit(scenario.app).port)
     log = tempfile.TemporaryFile()
     proc = subprocess.Popen(command_args(scenario.command), cwd=scenario.path.parent, env=env, stdout=log, stderr=subprocess.STDOUT)
     return proc, log

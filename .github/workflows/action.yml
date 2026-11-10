@@ -32,6 +32,8 @@ jobs:
           scenario: examples/tickets/fixed.toml
           package: .
           artifact-name: fixed-report
+          args: --workers 2 --junit fixed.xml
+      - run: grep -q 'tests="4" failures="0"' fixed.xml
       - name: The buggy example fails the job
         id: buggy
         continue-on-error: true
@@ -42,3 +44,33 @@ jobs:
           report: buggy-report.html
           artifact-name: buggy-report
       - run: test "${{ steps.buggy.outcome }}" = failure
+
+  tls:
+    name: A database that requires TLS
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5433/postgres
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - run: uv sync
+      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      - name: Start Postgres with TLS on, and refuse every connection without it
+        run: |
+          docker run -d --name tls -p 5433:5432 -e POSTGRES_PASSWORD=postgres postgres:18 \
+            -c ssl=on \
+            -c ssl_cert_file=/etc/ssl/certs/ssl-cert-snakeoil.pem \
+            -c ssl_key_file=/etc/ssl/private/ssl-cert-snakeoil.key
+          until docker exec tls psql -h 127.0.0.1 -U postgres -c "select 1" > /dev/null 2>&1; do sleep 1; done
+          docker exec tls bash -c 'sed -i "s/^host all all all/hostssl all all all/" "$(psql -U postgres -Atc "show hba_file")"'
+          docker exec tls psql -U postgres -c "select pg_reload_conf()"
+      - name: A connection without TLS is refused
+        run: |
+          ! python -c "import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'], sslmode='disable')"
+      - name: racetrap finds the race through TLS
+        run: |
+          DATABASE_URL="$DATABASE_URL?sslmode=require" racetrap examples/tickets/buggy.toml | tee out.txt || true
+          grep -q "4 of 4 pairs race" out.txt
+      - name: The fixed example passes through TLS
+        run: DATABASE_URL="$DATABASE_URL?sslmode=require" racetrap examples/tickets/fixed.toml

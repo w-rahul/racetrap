@@ -2,6 +2,7 @@
 
 - [Scenario file](#scenario-file)
 - [Command line](#command-line)
+- [pytest](#pytest)
 - [JSON results](#json-results)
 - [GitHub Action](#github-action)
 - [Docker](#docker)
@@ -33,7 +34,7 @@ headers = { authorization = "Bearer bob-token" }
 | Key | Required | Default | Meaning |
 | --- | --- | --- | --- |
 | `app` | yes | | Base URL of the app. Starts with `http://` or `https://`. |
-| `database` | yes | | URL of the real Postgres. The proxy forwards to it, and racetrap connects to it directly to save, restore and compare the tables. |
+| `database` | yes | | URL of the real Postgres. The proxy forwards to it, and racetrap connects to it directly to save, restore and compare the tables. See [TLS](#tls) for `sslmode`. |
 | `[[request]]` | yes | | The requests to race. At least one. See below. |
 | `[[login]]` | no | | Requests sent once before the run, to log users in. See [Logging in](#logging-in). |
 | `command` | no | | Command that starts the app. racetrap runs it in the scenario file's folder, with the database URL pointing at the proxy, and stops it at the end. |
@@ -115,10 +116,26 @@ Without `command`, start the app yourself with its database URL pointing at the 
 
 The app needs a connection pool of at least two, or the second request cannot start while the first is held.
 
+### TLS
+
+racetrap opens TLS to the database when the `database` URL asks for it. It reads `sslmode` the way libpq does.
+
+| `sslmode` | What the proxy does |
+| --- | --- |
+| `disable` | Plain TCP. |
+| `allow`, `prefer`, or not set | TLS when the server offers it, without checking its certificate. Plain TCP when it does not. |
+| `require` | TLS, without checking the certificate. A server that offers no TLS is an error. |
+| `verify-ca` | TLS, and the certificate must come from a trusted authority. |
+| `verify-full` | The same, and the certificate must also match the host name. |
+
+For the two verify modes, `sslrootcert` names the authority's certificate file. Without it, racetrap trusts the authorities your system trusts. Client certificates (`sslcert` and `sslkey`) are not sent yet.
+
+The app always talks to the proxy in plain TCP, on the same machine. When racetrap starts the app, the URL it hands over has `sslmode=disable` in place of the one you set, and no `channel_binding`. When you start the app yourself, turn TLS off for its connection to the proxy.
+
 ## Command line
 
 ```
-racetrap SCENARIO [--report PATH] [--json PATH] [--all-pairs]
+racetrap SCENARIO [--report PATH] [--json PATH] [--junit PATH] [--all-pairs] [--workers N]
 racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 ```
 
@@ -126,13 +143,27 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | --- | --- | --- |
 | `--report PATH` | `racetrap-report.html` | Where to write the HTML report. |
 | `--json PATH` | | Also write the results as JSON. |
+| `--junit PATH` | | Also write the results as JUnit XML, one test case per pair. A racing pair is a failure, and a skipped pair is skipped. |
 | `--all-pairs` | | Test every pair, even two requests that share no tables. |
+| `--workers N` | `1` | Run N pairs at a time. See [Workers](#workers). |
 | `init --openapi SOURCE` | | Path or URL of an OpenAPI document, in JSON or YAML. |
 | `init --app URL` | from the URL or the document's servers | Base URL to put in the scenario. |
 | `init -o FILE` | `racetrap.toml` | The scenario file to write. |
 | `init --force` | | Overwrite the file if it exists. |
 
 `init` writes one request for every POST, PUT, PATCH and DELETE. It fills path parameters and builds example bodies from the schemas, using the document's own examples and defaults where it has them.
+
+### Workers
+
+`--workers N` splits the pairs between N workers that run at the same time. Each worker has its own:
+
+- **Database.** The first worker uses the database itself. Every other worker gets a copy named `racetrap_1_<database>`, `racetrap_2_<database>` and so on, made with `CREATE DATABASE ... TEMPLATE` after `init` has run, and dropped at the end.
+- **Proxy.** On the next port: 6499, 6500, 6501.
+- **App.** On the next port after the one in `app`. racetrap rewrites that port number wherever it appears in `command`, and sets the `PORT` environment variable for apps that take their port from there.
+
+It needs `command`, a port in `app`, and a database user that may create databases. Postgres only copies a database that nobody else is connected to, so close other connections to the test database first.
+
+Each worker logs in and learns the requests by itself, so the gain grows with the number of pairs. On the ticket example with six users, 36 pairs took 40.8 s with one worker, 14.4 s with four and 11.2 s with eight, on one Windows machine. The verdicts were the same every time.
 
 ### Exit codes
 
@@ -142,13 +173,28 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | 1 | At least one pair races. |
 | 2 | racetrap could not run: a bad scenario, an app that did not start, or a database error. |
 
+## pytest
+
+racetrap comes with a pytest plugin. Name a scenario file and it runs as tests, one per pair:
+
+```
+$ pytest racetrap.toml
+racetrap.toml::alice buys vs alice buys PASSED
+racetrap.toml::alice buys vs bob buys FAILED
+```
+
+- A racing pair fails, with the order that raced and the path of the HTML report. The report is written as `racetrap-report-<scenario>.html` in the folder pytest was started from.
+- A pair racetrap skips is a skipped test, and racetrap's warnings show up as pytest warnings.
+- Only files named on the command line or in `testpaths` are run. A scenario empties tables, so a plain `pytest` never picks one up by its name alone.
+- The scenario runs once, when its first test starts. Choosing a single pair with `-k` still runs the whole scenario.
+
 ## JSON results
 
 `--json results.json` writes this shape. The example is cut to one pair and one race.
 
 ```json
 {
-  "racetrap": "0.4.0",
+  "racetrap": "0.5.0",
   "scenario": "buggy.toml",
   "app": "http://127.0.0.1:8765",
   "runs": 38,
@@ -191,7 +237,7 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 ## GitHub Action
 
 ```yaml
-- uses: w-rahul/racetrap@v0.4.0
+- uses: w-rahul/racetrap@v0.5.0
   with:
     scenario: racetrap.toml
 ```
@@ -202,7 +248,8 @@ racetrap init --openapi SOURCE [--app URL] [-o FILE] [--force]
 | `report` | `racetrap-report.html` | Where to write the HTML report. |
 | `upload-report` | `true` | Upload the report as a workflow artifact. |
 | `artifact-name` | `racetrap-report` | Name of that artifact. Change it when a job runs the action twice. |
-| `package` | `racetrap` | What to install, like `racetrap==0.4.0`. |
+| `package` | `racetrap` | What to install, like `racetrap==0.5.0`. |
+| `args` | | Extra command line options, like `--workers 4` or `--junit results.xml`. |
 
 The job needs a Postgres it can reach and your app's own dependencies installed, so `command` can start the app. The step fails when any pair races.
 

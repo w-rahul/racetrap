@@ -1,6 +1,6 @@
 [project]
 name = "racetrap"
-version = "0.4.0"
+version = "0.5.0"
 description = "Finds race conditions in web APIs by forcing the worst order of their SQL statements."
 readme = "README.md"
 license = "MIT"
@@ -11,6 +11,7 @@ keywords = ["race condition", "postgres", "concurrency", "testing", "isolation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
+    "Framework :: Pytest",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
@@ -32,6 +33,9 @@ Issues = "https://github.com/w-rahul/racetrap/issues"
 [project.scripts]
 racetrap = "racetrap.cli:main"
 
+[project.entry-points.pytest11]
+racetrap = "racetrap.pytest_plugin"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
@@ -41,6 +45,9 @@ dev = [
     "uvicorn>=0.30",
     "asyncpg>=0.30",
     "psycopg2-binary>=2.9.10",
+    "trustme>=1.2.1",
+    "mypy>=2.4.1",
+    "types-pyyaml>=6.0.12.20261103",
 ]
 
 [tool.ruff.lint]

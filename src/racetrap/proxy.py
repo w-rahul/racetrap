@@ -3,6 +3,7 @@
 import asyncio
 import itertools
 import logging
+import ssl
 
 from . import wire
 
@@ -39,10 +40,11 @@ class Hooks:
 
 
 class Proxy:
-    def __init__(self, listen, upstream, hooks):
+    def __init__(self, listen, upstream, hooks, tls=None):
         self.listen = listen
         self.upstream = upstream
         self.hooks = hooks
+        self.tls = tls
         self.ids = itertools.count(1)
         self.tasks = set()
 
@@ -63,6 +65,8 @@ class Proxy:
             await self._serve(creader, cwriter)
         except (asyncio.IncompleteReadError, ConnectionError, wire.ProtocolError) as e:
             log.debug("connection ended: %r", e)
+        except ssl.SSLError as e:
+            log.warning("TLS to the database failed: %s", e)
         finally:
             self.tasks.discard(task)
             cwriter.close()
@@ -70,13 +74,15 @@ class Proxy:
     async def _serve(self, creader, cwriter):
         code, raw = await wire.read_startup(creader)
         while code in (wire.SSL_REQUEST, wire.GSSENC_REQUEST):
-            # Plain TCP only. Clients on sslmode=prefer retry without TLS.
+            # The app side is plain TCP. Clients on sslmode=prefer retry without TLS.
             cwriter.write(b"N")
             code, raw = await wire.read_startup(creader)
         # localhost often resolves to ::1 first. Racing IPv4 after 250 ms keeps a
         # refused IPv6 attempt from costing seconds on every new connection.
         ureader, uwriter = await asyncio.open_connection(*self.upstream, happy_eyeballs_delay=0.25)
         try:
+            if self.tls:
+                await self._encrypt(ureader, uwriter)
             uwriter.write(raw)
             if code == wire.CANCEL_REQUEST:
                 await uwriter.drain()
@@ -96,6 +102,14 @@ class Proxy:
                 self.hooks.closed(conn)
         finally:
             uwriter.close()
+
+    async def _encrypt(self, ureader, uwriter):
+        context, required = self.tls
+        uwriter.write(wire.SSL_REQUEST_PACKET)
+        if await ureader.readexactly(1) == b"S":
+            await uwriter.start_tls(context, server_hostname=self.upstream[0])
+        elif required:
+            raise ssl.SSLError("the server does not offer TLS, but sslmode asks for it")
 
     async def _upstream(self, conn, creader, uwriter):
         held, sqls = [], []
@@ -137,3 +151,21 @@ class Proxy:
                 rows = 0
             cwriter.write(raw)
             await cwriter.drain()
+
+
+def tls_context(params):
+    """Read sslmode the way libpq does. Returns (context, required), or None for plain TCP."""
+    mode = params.get("sslmode", "prefer")
+    if mode == "disable":
+        return None
+    if mode in ("verify-ca", "verify-full"):
+        # shortcut: without sslrootcert this trusts the system store, where libpq
+        # reads ~/.postgresql/root.crt. Client certificates are not sent.
+        root = params.get("sslrootcert")
+        context = ssl.create_default_context(cafile=None if root in (None, "system") else root)
+        context.check_hostname = mode == "verify-full"
+    else:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+    return context, mode not in ("allow", "prefer")

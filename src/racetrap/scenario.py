@@ -6,7 +6,7 @@ import re
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 # A value a login captured, written as ${login.name}.
 REF = re.compile(r"\$\{(\w+)\.(\w+)\}")
@@ -61,7 +61,12 @@ class Scenario:
     @property
     def proxied_database(self):
         """The database URL with the proxy in place of the real server."""
-        return with_address(self.database, *self.proxy)
+        u = urlsplit(with_address(self.database, *self.proxy))
+        if "sslmode=" not in u.query and "channel_binding=" not in u.query:
+            return urlunsplit(u)
+        # The proxy speaks plain TCP to the app and opens TLS to the server itself.
+        query = [(k, "disable" if k == "sslmode" else v) for k, v in parse_qsl(u.query, keep_blank_values=True) if k != "channel_binding"]
+        return urlunsplit(u._replace(query=urlencode(query, quote_via=quote)))
 
 
 def with_address(url, host, port):

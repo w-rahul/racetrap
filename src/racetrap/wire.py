@@ -9,6 +9,7 @@ import struct
 SSL_REQUEST = 80877103
 GSSENC_REQUEST = 80877104
 CANCEL_REQUEST = 80877102
+SSL_REQUEST_PACKET = struct.pack("!II", 8, SSL_REQUEST)
 
 # Postgres itself refuses messages over 1 GB, so a bigger length is garbage.
 MAX_LENGTH = 1 << 30

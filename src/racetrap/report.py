@@ -4,6 +4,7 @@ import html
 import json
 import re
 from datetime import datetime
+from xml.etree import ElementTree
 
 from . import __version__
 from .explore import POOL_RESET, normalize, shape
@@ -94,6 +95,32 @@ def summary(scenario, result):
             for p in result.pairs
         ],
     }
+
+
+def explain(pair):
+    """Why a pair races, as plain text."""
+    return "\n".join(
+        f"{pair.a.name} was held before its {short(r.hold[0])}{f' (time {r.hold[1]})' if r.hold[1] > 1 else ''} while {pair.b.name} ran: "
+        f"{', '.join(r.reasons)}. A answered {r.outcome.statuses['A']}, B answered {r.outcome.statuses['B']}."
+        for r in pair.races
+    )
+
+
+def junit(scenario, result):
+    """The result as JUnit XML, one test case per pair."""
+    racing = sum(bool(p.races) for p in result.pairs)
+    skipped = sum(p.skipped for p in result.pairs)
+    suite = ElementTree.Element(
+        "testsuite", name="racetrap", tests=str(len(result.pairs)), failures=str(racing), errors="0", skipped=str(skipped), time=f"{result.seconds:.2f}"
+    )
+    for p in result.pairs:
+        case = ElementTree.SubElement(suite, "testcase", classname=scenario.path.stem, name=f"{p.a.name} vs {p.b.name}")
+        if p.skipped:
+            ElementTree.SubElement(case, "skipped", message=passed(p))
+        elif p.races:
+            failure = ElementTree.SubElement(case, "failure", message=f"{len(p.races)} of {len(p.schedules)} orders race")
+            failure.text = explain(p)
+    return ElementTree.tostring(suite, encoding="unicode", xml_declaration=True) + "\n"
 
 
 def names(pair):
