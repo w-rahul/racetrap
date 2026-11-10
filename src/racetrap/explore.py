@@ -333,6 +333,8 @@ class Explorer:
             self.loose[r.name] = differing(first.bodies["A"], again.bodies["A"])
             if first.statuses != again.statuses:
                 self.warn(f"{r.name} answered {first.statuses['A']} then {again.statuses['A']} from the same state")
+            if first.statuses["A"] >= 500:
+                self.warn(f"{r.name} answered {first.statuses['A']} on its own. Fix the request or the app first, or its pairs prove little")
             for q in first.failed:
                 self.warn(f"invariant fails after {r.name} alone: {q}")
             traces[r.name] = [shape(e.text) for e in first.events if e.kind == "sql" and e.who != "bg"]
@@ -599,6 +601,8 @@ def judge(
             reasons.append("a deadlock aborted one request")
         if "40001" in codes:
             reasons.append("a serialization failure was not retried")
+        if "23505" in codes:
+            reasons.append("a unique violation was not handled")
     return reasons
 
 

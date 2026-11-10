@@ -6,7 +6,9 @@ import pytest
 from racetrap.explore import (
     Event,
     Outcome,
+    Pair,
     RunError,
+    Schedule,
     body_key,
     captured,
     differing,
@@ -19,6 +21,8 @@ from racetrap.explore import (
     shape,
     unstable,
 )
+from racetrap.report import fix
+from racetrap.scenario import Request
 
 IGNORED = {("bookings", "id")}
 
@@ -195,3 +199,15 @@ def test_fill_puts_captured_values_everywhere():
     values = {"alice.token": "t-1"}
     assert fill("/users/${alice.token}", values) == "/users/t-1"
     assert fill({"authorization": "Bearer ${alice.token}", "n": [1, "${alice.token}"]}, values) == {"authorization": "Bearer t-1", "n": [1, "t-1"]}
+
+
+def test_a_unique_violation_gets_its_own_reason_and_fix():
+    insert = "INSERT INTO users (email) VALUES (?)"
+    a = Request("a", "POST", "/signup")
+    serials = [Outcome({"A": 200, "B": 400}, {}, [], []), Outcome({"A": 400, "B": 200}, {}, [], [])]
+    events = [Event(0.0, "A", 1, "error", "23505 duplicate key value violates unique constraint")]
+    forced = Outcome({"A": 500, "B": 200}, {}, events, [])
+    reasons = judge(forced, serials, set())
+    assert reasons == ["responses match no serial order", "a unique violation was not handled"]
+    advice = fix(Pair(a, a, ["SELECT 1", insert], serials, set()), Schedule((insert, 1), forced, reasons), "a", "a again")
+    assert "ON CONFLICT DO NOTHING" in advice and "FOR UPDATE" not in advice

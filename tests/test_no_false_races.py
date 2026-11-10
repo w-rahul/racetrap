@@ -110,3 +110,14 @@ def test_requests_use_what_a_login_captured(tmp_path, monkeypatch, login):
     assert all(set(s.statuses.values()) == {200} for p in result.pairs for s in p.serials)
     assert all(p.schedules for p in result.pairs)
     assert not [p for p in result.pairs if p.races]
+
+
+@needs_db
+def test_warns_when_a_request_fails_on_its_own(tmp_path, monkeypatch):
+    """A request that answers 500 alone is a broken scenario, and racing it proves little."""
+    monkeypatch.setenv("DATABASE_URL", DSN)
+    text = SCENARIO.replace("APP_DIR", str(Path(__file__).parent)).replace("PATH", "/broken")
+    (tmp_path / "shop.toml").write_text(text, encoding="utf-8")
+    result = run_async(asyncio.wait_for(run(load(tmp_path / "shop.toml")), 120))
+    assert any("answered 500 on its own" in w for w in result.warnings)
+    assert not [p for p in result.pairs if p.races]

@@ -82,6 +82,14 @@ async def take(body: User):
     return {}
 
 
+@app.post("/broken")
+async def broken():
+    """Reads, then fails, the way a request with a wrong setup does."""
+    async with app.state.pool.acquire() as conn:
+        await conn.fetchval("SELECT n FROM counters WHERE id = 1")
+    return JSONResponse({"detail": "boom"}, status_code=500)
+
+
 @app.post("/login")
 async def login(body: User, response: Response):
     """Hands out a token in the body and a session in a cookie."""

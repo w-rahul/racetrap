@@ -342,6 +342,18 @@ def cell_html(row: dict[str, Any]) -> str:
 
 
 def fix(pair: Pair, schedule: Schedule, a: str, b: str) -> str:
+    if any(e.kind == "error" and e.text.startswith("23505") for e in schedule.outcome.events):
+        # a lock on the read cannot help: the row both requests looked for does not exist yet
+        return (
+            "<p>A and B both tried to insert the same row. The unique constraint stopped one of them, "
+            "so the data is safe. The app did not expect that error, and its response shows it.</p>"
+            '<ol class="fixes">'
+            "<li>Catch the unique violation, error 23505, and answer the way your duplicate check does.</li>"
+            "<li>Or insert with <code>ON CONFLICT DO NOTHING</code> and treat zero rows as the duplicate.</li>"
+            "</ol>"
+            '<p class="after">Locking the read does not help here, because there is no row to lock yet. '
+            "Run racetrap again after the fix.</p>"
+        )
     sql, n = schedule.hold
     seen, cut = 0, len(pair.trace)
     for i, s in enumerate(pair.trace):

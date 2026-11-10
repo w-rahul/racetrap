@@ -7,6 +7,11 @@ Notable changes to racetrap. Versions follow [semantic versioning](https://semve
 ### Added
 
 - `form` sends a request body as a form. Logins that follow the OAuth2 password flow need it.
+- A warning when a request answers with a 5xx status on its own, because racing a broken request proves little.
+
+### Fixed
+
+- A race that ends in a unique violation gets advice that fits it: handle the error or insert with `ON CONFLICT`. The report used to suggest locking a row that does not exist yet.
 
 ## 0.5.0 (2026-11-10)
 
